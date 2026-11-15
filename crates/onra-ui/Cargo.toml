@@ -1,0 +1,12 @@
+[package]
+name = "onra-ui"
+description = "Onra's terminal rendering: theme, tables, sparklines, brand art"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+enable-ansi-support.workspace = true
+rust_decimal.workspace = true
+unicode-width.workspace = true

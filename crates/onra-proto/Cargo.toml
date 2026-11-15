@@ -1,0 +1,13 @@
+[package]
+name = "onra-proto"
+description = "Onra's machine interface: the versioned JSON envelope agents consume"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+onra-core.workspace = true
+humantime.workspace = true
+serde.workspace = true
+serde_json.workspace = true

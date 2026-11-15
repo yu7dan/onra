@@ -1,0 +1,27 @@
+[package]
+name = "onra-cli"
+description = "Onra: the agent-native trading terminal for on-chain markets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "onra"
+path = "src/main.rs"
+
+[dependencies]
+onra-core.workspace = true
+onra-proto.workspace = true
+onra-ui.workspace = true
+onra-venues.workspace = true
+
+clap.workspace = true
+dirs.workspace = true
+futures.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sys-locale.workspace = true
+tokio.workspace = true
+toml.workspace = true

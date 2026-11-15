@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+repository = "https://github.com/yu7dan/onra"
+
+[workspace.dependencies]
+onra-core = { path = "crates/onra-core" }
+onra-proto = { path = "crates/onra-proto" }
+onra-venues = { path = "crates/onra-venues" }
+onra-ui = { path = "crates/onra-ui" }
+
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+enable-ansi-support = "0.2"
+futures = "0.3"
+humantime = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sys-locale = "0.3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+toml = "0.8"
+unicode-width = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

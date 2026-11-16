@@ -10,20 +10,11 @@
   <a href="https://x.com/bingjie758"><img src="https://img.shields.io/badge/build%20in%20public-%40bingjie758-f59e0b?style=flat-square&labelColor=0d0d10&logo=x&logoColor=white" alt="在 X 上公开构建"></a>
 </p>
 
-<p align="center">
-  <b>一条命令行，通往所有链上市场。人能用，AI 也能用。</b><br>
-  <sub>现已接入币安 · Hyperliquid · Jupiter。账户、交易、自然语言正在路上。</sub>
-</p>
-
 <p align="center"><a href="README.md">English</a></p>
 
-<p align="center"><img src="assets/intro.gif" width="520" alt="日出开场动画"></p>
-
----
+AI Agent 最擅长的界面是命令行，而市场的接口各说各话。**Onra** 站在两者之间：一个入口到达所有市场，对键盘前的人足够好看，对背后的 AI 足够精确。现已接入币安、Hyperliquid、Jupiter，账户、交易和自然语言正在路上。
 
 ## 为什么是 Onra
-
-AI Agent 最擅长的界面是命令行，而市场的接口各说各话。Onra 站在两者之间：一个入口到达所有市场，对键盘前的人足够好看，对背后的 AI 足够精确。
 
 <table>
 <tr>

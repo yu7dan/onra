@@ -10,22 +10,15 @@
   <a href="https://x.com/bingjie758"><img src="https://img.shields.io/badge/build%20in%20public-%40bingjie758-f59e0b?style=flat-square&labelColor=0d0d10&logo=x&logoColor=white" alt="Build in public on X"></a>
 </p>
 
-<p align="center">
-  <b>One command line to every on-chain market, for people and AI agents alike.</b><br>
-  <sub>Binance · Hyperliquid · Jupiter today. Accounts, trading and natural language on the way.</sub>
-</p>
-
 <p align="center"><a href="README.zh-CN.md">简体中文</a></p>
 
-<p align="center"><img src="assets/intro.gif" width="520" alt="The sunrise intro"></p>
-
----
+AI agents are fluent in the command line. Markets speak a dozen incompatible
+APIs. **Onra** stands between them: one interface that reaches every venue,
+styled for the people at the keyboard and precise for the agents behind it.
+Binance, Hyperliquid and Jupiter today; accounts, trading and natural
+language are on the way.
 
 ## Why Onra
-
-AI agents are fluent in the command line. Markets speak a dozen incompatible
-APIs. Onra stands between them: one interface that reaches every venue,
-styled for the people at the keyboard and precise for the agents behind it.
 
 <table>
 <tr>

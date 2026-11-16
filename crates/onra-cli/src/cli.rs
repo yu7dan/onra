@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use rust_decimal::Decimal;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -181,6 +182,46 @@ wallet, which can trade but not withdraw:
         action: AccountAction,
     },
 
+    /// Buy on Binance spot. Shows the plan and waits for Enter.
+    #[command(after_help = "\
+Amounts carry a unit, so nothing is ever guessed:
+  0.01 BTC     a quantity of the asset
+  100 USDT     spend this much of the quote
+  $100         US dollars of notional
+  50%  max     a share of what's available
+
+Without --limit the order fills now within the slippage bound (0.5% by
+default) or not at all; nothing is left resting. Every order is checked
+against your policy first (onra policy).
+
+Examples:
+  onra buy BTC $50 --testnet
+  onra buy ETH/USDC@bn 0.05 ETH --limit 1800
+  onra buy SOL 100 USDT --plan          plan only, for agents: onra exec <id>")]
+    Buy(TradeArgs),
+
+    /// Sell on Binance spot. Shows the plan and waits for Enter.
+    #[command(after_help = "\
+Examples:
+  onra sell BTC 50% --testnet
+  onra sell ETH 0.1 ETH --limit 2100")]
+    Sell(TradeArgs),
+
+    /// Carry out a plan made with --plan.
+    Exec {
+        #[arg(value_name = "PLAN_ID")]
+        plan_id: String,
+    },
+
+    /// Approve a plan an agent made, and carry it out. Asks for the passphrase.
+    Approve {
+        #[arg(value_name = "PLAN_ID")]
+        plan_id: String,
+    },
+
+    /// Plans the signer is holding, including those waiting for approval.
+    Plans,
+
     /// Unlock the signer so trades can be signed. Asks for the vault passphrase.
     #[command(after_help = "\
 Trading keys stay sealed in the vault until you unlock. The signer then holds
@@ -263,6 +304,34 @@ pub enum AccountAction {
         #[arg(long)]
         remove: bool,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct TradeArgs {
+    /// <base>[/<quote>][@bn], e.g. BTC, ETH/USDC@bn. The quote defaults to USDT.
+    #[arg(value_name = "MARKET")]
+    pub market: String,
+    /// How much: `0.01 BTC`, `100 USDT`, `$100`, `50%` or `max`.
+    #[arg(required = true, num_args = 1..=2, value_name = "AMOUNT")]
+    pub amount: Vec<String>,
+    /// Rest a limit order at this price instead of filling now.
+    #[arg(long, value_name = "PRICE")]
+    pub limit: Option<Decimal>,
+    /// How much worse than the best price a fill may be, e.g. 0.3%.
+    #[arg(long, value_name = "PCT")]
+    pub slippage: Option<String>,
+    /// Trade on the venue's test network with play money.
+    #[arg(long)]
+    pub testnet: bool,
+    /// Only make the plan; carry it out later with `onra exec <id>`.
+    #[arg(long)]
+    pub plan: bool,
+    /// Skip the confirmation (a person at a terminal only; limits still apply).
+    #[arg(short, long)]
+    pub yes: bool,
+    /// Your own order id, so a retried command cannot place a second order.
+    #[arg(long, value_name = "ID")]
+    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

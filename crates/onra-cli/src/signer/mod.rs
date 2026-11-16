@@ -8,6 +8,7 @@
 //! can call unlocks it: both need a person at the keyboard.
 
 pub mod daemon;
+mod exec;
 pub mod guard;
 pub mod ipc;
 

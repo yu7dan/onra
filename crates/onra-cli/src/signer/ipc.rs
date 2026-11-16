@@ -32,6 +32,25 @@ pub enum Request {
     Halt,
     /// Check the audit chain with the seal key the signer holds.
     Verify,
+    /// Price and judge a trade; keeps the plan unless it is denied.
+    Plan {
+        request: crate::trade::TradeRequest,
+        initiator: onra_policy::Initiator,
+    },
+    /// Carry out a plan.
+    Exec {
+        plan_id: String,
+        initiator: onra_policy::Initiator,
+    },
+    /// A person approves an agent's plan; the passphrase proves it.
+    Approve {
+        plan_id: String,
+        passphrase: Zeroizing<String>,
+    },
+    Show {
+        plan_id: String,
+    },
+    Plans,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

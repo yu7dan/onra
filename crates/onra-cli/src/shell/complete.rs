@@ -4,7 +4,7 @@ use onra_core::VenueId;
 
 use crate::config::KEYS;
 
-pub const COMMANDS: [&str; 21] = [
+pub const COMMANDS: [&str; 26] = [
     "price",
     "watch",
     "search",
@@ -14,6 +14,11 @@ pub const COMMANDS: [&str; 21] = [
     "balance",
     "positions",
     "orders",
+    "buy",
+    "sell",
+    "exec",
+    "approve",
+    "plans",
     "account",
     "unlock",
     "lock",

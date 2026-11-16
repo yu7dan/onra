@@ -49,7 +49,7 @@ pub struct Position {
     pub margin: Option<Decimal>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderSide {
     Buy,

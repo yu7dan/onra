@@ -369,10 +369,7 @@ impl Binance {
         params: &[(&str, &str)],
     ) -> Result<T> {
         use hmac::{Hmac, Mac};
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or_default();
+        let ts = crate::binance_clock::timestamp(&self.http, HOST).await?;
         let mut query: String = params.iter().map(|(k, v)| format!("{k}={v}&")).collect();
         query.push_str(&format!("timestamp={ts}&recvWindow=10000"));
         let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.secret.as_bytes())

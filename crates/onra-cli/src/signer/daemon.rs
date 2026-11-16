@@ -4,7 +4,7 @@
 //! running out, ends the process, and the keys go with its memory. A daemon
 //! that is started but never unlocked gives up after a short wait.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -14,12 +14,15 @@ use interprocess::local_socket::traits::tokio::Listener as _;
 use onra_core::{Error, ErrorCode, Result};
 use onra_keystore::SEAL_KEY;
 use onra_keystore::TradingVault;
+use onra_policy::{Decision, Initiator};
 use onra_signer::TradingKey;
+use onra_venues::{BinanceKey, Venues};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use super::ipc::{self, KeyInfo, Request, Response, Status};
-use super::{guard, vault};
+use super::{exec, guard, vault};
+use crate::trade::Plan;
 
 /// How long a fresh daemon waits for its first unlock.
 const FIRST_UNLOCK: Duration = Duration::from_secs(30);
@@ -33,9 +36,16 @@ struct Unlocked {
     until: Instant,
 }
 
+/// A plan the signer made and still honors.
+struct Pending {
+    plan: Plan,
+    approved: bool,
+}
+
 #[derive(Default)]
 struct State {
     unlocked: Option<Unlocked>,
+    plans: HashMap<String, Pending>,
     stop: bool,
 }
 
@@ -69,11 +79,14 @@ pub fn run() -> Result<ExitCode> {
         .enable_all()
         .build()
         .map_err(|e| Error::new(ErrorCode::Internal, format!("cannot start runtime: {e}")))?;
-    runtime.block_on(serve(vault()?))?;
+    // The signer prices trades itself, through the same network settings.
+    let net = crate::config::load().map(|c| c.net(None)).unwrap_or_default();
+    let venues = Venues::new(&net)?;
+    runtime.block_on(serve(vault()?, venues))?;
     Ok(ExitCode::SUCCESS)
 }
 
-async fn serve(vault: TradingVault) -> Result<()> {
+async fn serve(vault: TradingVault, venues: Venues) -> Result<()> {
     // Windows reports a taken pipe name as "access denied"; asking is clearer.
     if ipc::connect().await.is_some() {
         return Err(Error::new(ErrorCode::Usage, "a signer is already running"));
@@ -91,9 +104,8 @@ async fn serve(vault: TradingVault) -> Result<()> {
     loop {
         tokio::select! {
             conn = listener.accept() => {
-                // A client that connects and goes quiet must not stall the signer.
                 if let Ok(conn) = conn {
-                    let _ = tokio::time::timeout(Duration::from_secs(10), handle(conn, &state, &vault)).await;
+                    handle(conn, &state, &vault, &venues).await;
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(500)) => {}
@@ -114,13 +126,28 @@ async fn serve(vault: TradingVault) -> Result<()> {
 
 /// One request per connection, served to completion before the next: the
 /// signer does little, and serial handling keeps its state simple.
-async fn handle(conn: Stream, state: &Mutex<State>, vault: &TradingVault) {
-    let response = match ipc::read_line::<Request>(&conn).await {
-        Ok(Some(request)) => match apply(request, state, vault) {
-            Ok(data) => Response::ok(data),
-            Err(e) => Response::err(e),
-        },
-        Ok(None) => return,
+async fn handle(conn: Stream, state: &Mutex<State>, vault: &TradingVault, venues: &Venues) {
+    // A client that connects and goes quiet must not stall the signer.
+    let request =
+        match tokio::time::timeout(Duration::from_secs(10), ipc::read_line::<Request>(&conn)).await
+        {
+            Ok(Ok(Some(request))) => request,
+            Ok(Err(e)) => {
+                let _ = ipc::write_line(&conn, &Response::err(e)).await;
+                return;
+            }
+            _ => return,
+        };
+    let result = match request {
+        Request::Plan { .. }
+        | Request::Exec { .. }
+        | Request::Approve { .. }
+        | Request::Show { .. }
+        | Request::Plans => trade(request, state, vault, venues).await,
+        other => apply(other, state, vault),
+    };
+    let response = match result {
+        Ok(data) => Response::ok(data),
         Err(e) => Response::err(e),
     };
     let _ = ipc::write_line(&conn, &response).await;
@@ -133,6 +160,137 @@ fn status(s: &State) -> Value {
 fn locked() -> Error {
     Error::new(ErrorCode::Locked, "the signer is locked")
         .with_hint(json!({ "cause": "locked", "suggest": "onra unlock" }))
+}
+
+/// The Binance key for the plan's network and the seal key, copied out so
+/// no lock is held while talking to the venue.
+fn credentials(state: &Mutex<State>, testnet: bool) -> Result<(BinanceKey, Zeroizing<Vec<u8>>)> {
+    let s = state.lock().expect("state lock");
+    let u = s.unlocked.as_ref().ok_or_else(locked)?;
+    let name = if testnet { "bn.testnet" } else { "bn" };
+    let key = match u.keys.get(name) {
+        Some(TradingKey::Binance(k)) => BinanceKey { key: k.key.clone(), secret: k.secret.clone() },
+        _ => {
+            let flag = if testnet { " --testnet" } else { "" };
+            return Err(Error::new(ErrorCode::Credentials, format!("no {name} trading key in the vault"))
+                .with_hint(json!({ "cause": "no_trading_key", "venue": "binance", "suggest": format!("onra account trade bn{flag}") })));
+        }
+    };
+    Ok((key, u.seal.clone()))
+}
+
+fn denied(verdict: &onra_policy::Verdict) -> Error {
+    let failed: Vec<_> = verdict.failed().collect();
+    let what = failed
+        .iter()
+        .map(|c| format!("{} ({} > {})", c.rule, c.value, c.limit))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Error::new(ErrorCode::Policy, format!("blocked by policy: {what}"))
+        .with_hint(json!({ "cause": "denied", "checks": failed }))
+}
+
+fn to_value<T: serde::Serialize>(v: &T) -> Value {
+    serde_json::to_value(v).expect("serializes")
+}
+
+/// Takes a live plan out of the book; expired ones are dropped on the way.
+fn take(state: &Mutex<State>, id: &str) -> Result<Pending> {
+    let mut s = state.lock().expect("state lock");
+    let now = guard::now_ms();
+    s.plans.retain(|_, p| p.plan.expires_ms > now);
+    s.plans.remove(id).ok_or_else(|| {
+        Error::new(
+            ErrorCode::PlanExpired,
+            format!("plan {id} is unknown or expired; make a new one"),
+        )
+        .with_hint(json!({ "cause": "plan_expired", "plan_id": id }))
+    })
+}
+
+async fn trade(
+    request: Request,
+    state: &Mutex<State>,
+    vault: &TradingVault,
+    venues: &Venues,
+) -> Result<Value> {
+    match request {
+        Request::Plan { request, initiator } => {
+            let (key, seal) = credentials(state, request.testnet)?;
+            let plan = exec::plan(&request, initiator, venues, &key, &seal).await?;
+            if plan.verdict.decision != Decision::Deny {
+                let pending = Pending { plan: plan.clone(), approved: false };
+                state.lock().expect("state lock").plans.insert(plan.id.clone(), pending);
+            }
+            Ok(to_value(&plan))
+        }
+        Request::Exec { plan_id, initiator } => {
+            let pending = take(state, &plan_id)?;
+            if pending.plan.verdict.decision == Decision::NeedsApproval && !pending.approved {
+                let plan = pending.plan.clone();
+                state.lock().expect("state lock").plans.insert(plan_id.clone(), pending);
+                return Err(Error::new(
+                    ErrorCode::ApprovalRequired,
+                    format!("plan {plan_id} waits for a person to approve it"),
+                )
+                .with_hint(json!({ "cause": "approval", "plan_id": plan_id, "summary": plan.summary(), "suggest": format!("onra approve {plan_id}") })));
+            }
+            carry_out(pending.plan, initiator, false, state, venues).await
+        }
+        Request::Approve { plan_id, passphrase } => {
+            // Only someone with the passphrase can approve.
+            vault.seal_key(&passphrase)?;
+            let pending = take(state, &plan_id)?;
+            let (_, seal) = credentials(state, pending.plan.testnet)?;
+            guard::audit_log()?.append(
+                &seal,
+                guard::now_ms(),
+                "approved",
+                Some(Initiator::Human),
+                json!({ "plan_id": plan_id, "summary": pending.plan.summary() }),
+            )?;
+            carry_out(pending.plan, Initiator::Human, true, state, venues).await
+        }
+        Request::Show { plan_id } => {
+            let mut s = state.lock().expect("state lock");
+            let now = guard::now_ms();
+            s.plans.retain(|_, p| p.plan.expires_ms > now);
+            let p = s.plans.get(&plan_id).ok_or_else(|| {
+                Error::new(ErrorCode::PlanExpired, format!("plan {plan_id} is unknown or expired"))
+                    .with_hint(json!({ "cause": "plan_expired", "plan_id": plan_id }))
+            })?;
+            Ok(to_value(&p.plan))
+        }
+        Request::Plans => {
+            let mut s = state.lock().expect("state lock");
+            let now = guard::now_ms();
+            s.plans.retain(|_, p| p.plan.expires_ms > now);
+            let mut plans: Vec<&Plan> = s.plans.values().map(|p| &p.plan).collect();
+            plans.sort_by_key(|p| p.created_ms);
+            Ok(to_value(&plans))
+        }
+        _ => unreachable!("routed by handle"),
+    }
+}
+
+/// Re-judges a plan against the policy and the day's trading as they are
+/// now, then places the order.
+async fn carry_out(
+    plan: Plan,
+    initiator: Initiator,
+    approved: bool,
+    state: &Mutex<State>,
+    venues: &Venues,
+) -> Result<Value> {
+    let (key, seal) = credentials(state, plan.testnet)?;
+    // An approval is a person's decision; otherwise the plan's own origin counts.
+    let judged_as = if approved { Initiator::Human } else { plan.initiator };
+    let verdict = exec::judge(&seal, plan.notional_usd, plan.slippage_pct, judged_as)?;
+    if verdict.decision == Decision::Deny {
+        return Err(denied(&verdict));
+    }
+    let execution = exec::execute(&plan, initiator, venues, &key, &seal).await?;
+    Ok(to_value(&execution))
 }
 
 fn apply(request: Request, state: &Mutex<State>, vault: &TradingVault) -> Result<Value> {
@@ -182,6 +340,7 @@ fn apply(request: Request, state: &Mutex<State>, vault: &TradingVault) -> Result
             let entries = guard::audit_log()?.verify(&u.seal)?;
             Ok(json!({ "entries": entries, "intact": true }))
         }
+        _ => unreachable!("routed by handle"),
     }
 }
 

@@ -2,6 +2,8 @@
 //! [`onra_core`] types; nothing venue-specific leaks past this crate.
 
 mod binance;
+mod binance_clock;
+mod binance_spot;
 mod http;
 mod hyperliquid;
 mod jupiter;
@@ -14,9 +16,11 @@ use onra_core::{
 use rust_decimal::Decimal;
 
 pub use binance::{BinanceKey, Restrictions};
+pub use binance_spot::{BinanceSpot, BookTop, SpotFill, SpotOrder, SymbolRules, TimeInForce};
 pub use http::{DEFAULT_SOLANA_RPC, NetConfig};
 
 pub struct Venues {
+    http: reqwest::Client,
     binance: binance::Binance,
     hyperliquid: hyperliquid::Hyperliquid,
     jupiter: jupiter::Jupiter,
@@ -36,11 +40,17 @@ impl Venues {
     pub fn new(net: &NetConfig) -> Result<Self> {
         let client = http::client(net)?;
         Ok(Self {
+            http: client.clone(),
             binance: binance::Binance::new(client.clone()),
             hyperliquid: hyperliquid::Hyperliquid::new(client.clone()),
             jupiter: jupiter::Jupiter::new(client.clone()),
             solana: solana::Solana::new(client, net.solana_rpc.clone()),
         })
+    }
+
+    /// Spot trading on Binance, or its test network.
+    pub fn binance_spot(&self, testnet: bool) -> BinanceSpot {
+        BinanceSpot::new(self.http.clone(), testnet)
     }
 
     /// Balances on `venue`, or `None` if no account is linked there.

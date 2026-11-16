@@ -769,6 +769,25 @@ impl Shell {
                 None
             }
             Some(Command::Daemon) => None,
+            // Trading confirms on a card with its own key handling; the shell
+            // gets that in a later step.
+            Some(
+                Command::Buy(_) | Command::Sell(_) | Command::Exec { .. } | Command::Approve { .. },
+            ) => {
+                self.print_error(
+                    screen,
+                    &Error::new(
+                        ErrorCode::Usage,
+                        "trading from the shell is coming; use a regular terminal for now",
+                    )
+                    .with_hint(serde_json::json!({ "suggest": "onra buy BTC $20 --testnet" })),
+                );
+                None
+            }
+            Some(Command::Plans) => {
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move { Done::Outcome(crate::trade::plans().await) }))
+            }
             // Reading the policy needs nothing; changing it needs a prompt.
             Some(Command::Policy { action: None | Some(crate::cli::PolicyAction::Show) }) => {
                 match crate::policy::policy(None) {

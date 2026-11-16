@@ -11,6 +11,7 @@ mod price;
 mod search;
 mod shell;
 mod signer;
+mod trade;
 mod watch;
 
 use std::process::ExitCode;
@@ -125,6 +126,21 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let venues = Venues::new(&config.net(cli.proxy))?;
             Ok(out.emit(block_on(account::account(action, &mut config, &venues))??))
         }
+        Command::Buy(args) => Ok(out.emit(block_on(trade::trade(
+            onra_core::OrderSide::Buy,
+            args,
+            out.theme().copied(),
+        ))??)),
+        Command::Sell(args) => Ok(out.emit(block_on(trade::trade(
+            onra_core::OrderSide::Sell,
+            args,
+            out.theme().copied(),
+        ))??)),
+        Command::Exec { plan_id } => Ok(out.emit(block_on(trade::exec(&plan_id))??)),
+        Command::Approve { plan_id } => {
+            Ok(out.emit(block_on(trade::approve(&plan_id, out.theme().copied()))??))
+        }
+        Command::Plans => Ok(out.emit(block_on(trade::plans())??)),
         Command::Unlock { ttl } => Ok(out.emit(block_on(signer::unlock(ttl))??)),
         Command::Lock => Ok(out.emit(block_on(signer::lock())??)),
         Command::Daemon => signer::daemon::run(),

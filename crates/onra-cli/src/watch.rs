@@ -351,6 +351,9 @@ pub async fn run_terminal(
         lines
     };
     let mut live = onra_ui::motion::Live::new();
+    // Without a keyboard (recording, scripted runs with --count) there is
+    // nothing to listen to.
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut events = EventStream::new();
     let mut redraw = tokio::time::interval(Duration::from_millis(80));
     let mut next_poll = Instant::now() + interval;
@@ -358,7 +361,7 @@ pub async fn run_terminal(
 
     loop {
         tokio::select! {
-            event = events.next() => match event {
+            event = events.next(), if interactive => match event {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
                     let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c');

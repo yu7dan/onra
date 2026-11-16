@@ -3,18 +3,68 @@
 //! Motion rules: short (under a second), never in the way (skipped when
 //! output isn't a terminal, under CI, or with `ONRA_NO_MOTION`), and every
 //! animation ends on a frame identical to the static render.
+//!
+//! `ONRA_RECORD=<dir>` records every live frame with its timestamp, for
+//! turning real output into demo GIFs. Recording implies motion.
 
 use std::env;
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const FPS: u32 = 40;
 
 pub fn motion_enabled() -> bool {
-    std::io::stdout().is_terminal()
-        && env::var_os("ONRA_NO_MOTION").is_none()
-        && env::var_os("CI").is_none()
+    recording().is_some()
+        || (std::io::stdout().is_terminal()
+            && env::var_os("ONRA_NO_MOTION").is_none()
+            && env::var_os("CI").is_none())
+}
+
+fn recording() -> Option<PathBuf> {
+    env::var_os("ONRA_RECORD").map(PathBuf::from)
+}
+
+/// Writes frames to `ONRA_RECORD`: `frame-NNNNN.ansi`, plus a line per frame
+/// in `timing.txt` with milliseconds since the recording began.
+struct Recorder {
+    dir: PathBuf,
+    started: Instant,
+    count: usize,
+}
+
+impl Recorder {
+    fn new() -> Option<Self> {
+        // One clock and one frame sequence per process, even when several
+        // live regions come and go (a loader, then the view it loads).
+        static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let dir = recording()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        let count = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".ansi"))
+                    .count()
+            })
+            .unwrap_or(0);
+        Some(Self { dir, started: *STARTED.get_or_init(Instant::now), count })
+    }
+
+    fn frame(&mut self, lines: &[String]) {
+        self.count += 1;
+        let _ = std::fs::write(
+            self.dir.join(format!("frame-{:05}.ansi", self.count)),
+            lines.join("\n"),
+        );
+        let line = format!("{} {}\n", self.count, self.started.elapsed().as_millis());
+        let timing =
+            std::fs::OpenOptions::new().create(true).append(true).open(self.dir.join("timing.txt"));
+        if let Ok(mut f) = timing {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
 }
 
 /// Play `frame(t)` for `t` from 0 to 1 over `duration`, redrawing in place.
@@ -57,15 +107,19 @@ pub fn reveal(lines: &[String]) {
 /// The cursor is hidden while it is live.
 pub struct Live {
     drawn: usize,
+    recorder: Option<Recorder>,
 }
 
 impl Live {
     pub fn new() -> Self {
         print!("\x1b[?25l");
-        Self { drawn: 0 }
+        Self { drawn: 0, recorder: Recorder::new() }
     }
 
     pub fn draw(&mut self, lines: &[String]) {
+        if let Some(rec) = &mut self.recorder {
+            rec.frame(lines);
+        }
         let mut out = std::io::stdout().lock();
         let mut buf = String::new();
         if self.drawn > 0 {

@@ -952,6 +952,8 @@ mod tests {
             (VenueId::Jupiter, Health::Checking),
         ];
         frames.push(("menu-en", en.frame()));
+        en.set_health(VenueId::Jupiter, Health::Up(Duration::from_millis(180)));
+        frames.push(("menu-en-online", en.frame()));
 
         for (name, frame) in &frames {
             assert!(frame.lines.len() > 5, "{name} frame too short");

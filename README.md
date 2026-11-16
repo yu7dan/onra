@@ -1,170 +1,200 @@
-<p align="center"><img src="assets/logo.png" alt="onra" width="360"></p>
-<p align="center"><code>M A R K E T S &nbsp; N E V E R &nbsp; S L E E P</code></p>
+<p align="center">
+  <img src="assets/hero.png" alt="Onra, the agent-native trading terminal" width="100%">
+</p>
 
-**Onra is the agent-native trading terminal for on-chain markets.** One
-command line, used by humans and AI agents alike, that reaches every market:
-DEXs, CEXs, perpetuals, tokenized stocks.
+<p align="center">
+  <a href="https://github.com/yu7dan/onra/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/yu7dan/onra/ci.yml?branch=main&style=flat-square&labelColor=0d0d10&color=f59e0b&label=ci" alt="CI"></a>
+  <img src="https://img.shields.io/badge/rust-1.88%2B-f59e0b?style=flat-square&labelColor=0d0d10&logo=rust&logoColor=white" alt="Rust 1.88+">
+  <img src="https://img.shields.io/badge/platform-windows%20%C2%B7%20macos%20%C2%B7%20linux-f59e0b?style=flat-square&labelColor=0d0d10" alt="Windows, macOS, Linux">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-f59e0b?style=flat-square&labelColor=0d0d10" alt="BSL 1.1"></a>
+  <a href="https://x.com/bingjie758"><img src="https://img.shields.io/badge/build%20in%20public-%40bingjie758-f59e0b?style=flat-square&labelColor=0d0d10&logo=x&logoColor=white" alt="Build in public on X"></a>
+</p>
 
-Traditional markets close. On-chain markets never do. Onra is the sun that
-never sets over them.
+<p align="center">
+  <b>One command line to every on-chain market, for people and AI agents alike.</b><br>
+  <sub>Binance · Hyperliquid · Jupiter today. Accounts, trading and natural language on the way.</sub>
+</p>
 
-> **Status: pre-alpha, building in public.** Read-only market data works
-> today. Trading, the policy engine and MCP integration are on the roadmap
-> below. Nothing here can move funds yet.
+<p align="center"><a href="README.zh-CN.md">简体中文</a></p>
 
-## Why
+<p align="center"><img src="assets/intro.gif" width="520" alt="The sunrise intro"></p>
 
-AI agents are fluent in the command line. Exchanges speak a dozen
-incompatible APIs. Onra sits between them: one consistent interface, styled
-tables for people, a stable JSON contract for machines, and a safety layer
-so agents can trade without ever touching a private key.
+---
 
-Onra is infrastructure. It is not an agent, a strategy, or a bot. It is the
+## Why Onra
+
+AI agents are fluent in the command line. Markets speak a dozen incompatible
+APIs. Onra stands between them: one interface that reaches every venue,
+styled for the people at the keyboard and precise for the agents behind it.
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### ☀ For people
+
+A home screen, guided menus and an input box with completion and inline
+suggestions. Nothing to memorize, and every menu action shows the command
+it ran, so the menu teaches the CLI.
+
+</td>
+<td width="33%" valign="top">
+
+### ⌁ For agents
+
+Every command speaks stable, versioned JSON: numbers as strings, structured
+errors with machine-readable hints, meaningful exit codes, NDJSON streams,
+partial results when a venue is down.
+
+</td>
+<td width="33%" valign="top">
+
+### ◆ Safety first
+
+Non-custodial. Agents never touch a key. Every trade becomes a plan that is
+simulated and checked against your policy before anything is signed.
+<sub><i>Trading lands in M3.</i></sub>
+
+</td>
+</tr>
+</table>
+
+Onra is infrastructure: not an agent, not a strategy, not a bot. It is the
 entry point that agents and people use to reach markets.
 
-## A taste
+## A closer look
+
+**The home screen.** `onra` on a terminal opens a session: venue health with
+live latency, a menu, and an input box that takes exactly the same commands
+as the CLI.
+
+<p align="center"><img src="assets/shell.png" width="88%" alt="The interactive home screen"></p>
+
+**Every venue in one view.** `onra price` puts each asset's quotes side by
+side: a reference price (the median), the 24h range, sparklines that fade
+from past to present, and the spread between the cheapest and the dearest
+venue.
+
+<p align="center"><img src="assets/price.png" width="88%" alt="onra price SOL ETH BTC"></p>
+
+**Live.** `onra watch` streams prices. Moves flash in the up/down color and
+fade; each quote draws its own micro-trend for the session.
+
+<p align="center"><img src="assets/watch.gif" width="88%" alt="onra watch SOL ETH BTC"></p>
+
+## Quick start
 
 ```console
-$ onra price SOL ETH
-
-  SOL   71.2289  +3.77%                             24h  67.41 ────────●───── 73.28
-    ● binance       SOL/USDT    71.2500   +3.77%   ▄▄▃▃▂▁▄▅▆▇█▇▄▄▅▅▄▅▆▆▇█▆▄   219ms
-    ● hyperliquid   SOL-PERP    71.2035   +3.81%   ▄▄▃▃▂▁▄▅▆▇█▇▄▄▄▅▄▅▆▆▇█▆▄   681ms
-    ● jupiter       SOL         71.2289   +3.77%                              166ms
-    spread 0.07%  ·  low hyperliquid  ·  high binance
-
-  ETH   1,809.99  +4.68%                      24h  1,711.08 ──────────●─── 1,845.18
-    ● binance       ETH/USDT   1,809.99   +4.68%   ▅▆▅▃▂▁▅▆▇▆█▇▄▅▅▅▅▆▇▆▇█▅▅   217ms
-    ● hyperliquid   ETH-PERP   1,808.75   +4.85%   ▅▆▅▃▂▁▅▆▇▆█▇▄▅▅▅▅▇▇▆▇█▅▅   423ms
-    ● jupiter       ETH        1,816.01   +5.35%                              225ms
-    spread 0.40%  ·  low hyperliquid  ·  high jupiter
-
-  3 venues · 683ms · 01:33:08 UTC
+$ git clone https://github.com/yu7dan/onra && cd onra
+$ cargo build --release            # Rust 1.88+
+$ ./target/release/onra            # the interactive home screen
+$ ./target/release/onra price SOL ETH
+$ ./target/release/onra watch BTC-PERP@hl --interval 0.5
 ```
 
-On a terminal the view is alive: venues report in as they answer, rows unfold,
-prices carry their own up/down colors. Each asset shows a reference price
-(the median across venues), its 24h range, and the spread between the
-cheapest and the dearest venue.
+Behind a firewall? `onra config set network.proxy http://127.0.0.1:7890`.
+`http://`, `https://` and `socks5://` all work.
 
-The same command, piped or called by an agent, emits JSON:
+Up/down colors follow your system locale (Chinese, Japanese and Korean show
+gains in red); switch with `onra config set ui.color_convention west`.
+
+## For agents
+
+The same command, piped or called by an agent, answers in JSON:
 
 ```console
 $ onra price SOL@hl | jq .
 {
   "ok": true,
   "data": {
-    "assets": [
-      {
-        "query": "SOL@hl",
-        "reference_price": "71.2175",
-        "quotes": [
-          {
-            "market": { "venue": "hyperliquid", "symbol": "SOL-PERP", "kind": "perp", ... },
-            "price": "71.2175",
-            "change_24h_pct": "3.8262",
-            "low_24h": "67.504",
-            "high_24h": "73.24",
-            "trend_24h": ["71.313", "71.327", ...],
-            "latency_ms": 632
-          }
-        ]
-      }
-    ]
+    "assets": [{
+      "query": "SOL@hl",
+      "reference_price": "71.2175",
+      "quotes": [{
+        "market": { "venue": "hyperliquid", "symbol": "SOL-PERP", "kind": "perp", ... },
+        "price": "71.2175",
+        "change_24h_pct": "3.8262",
+        "low_24h": "67.504",
+        "high_24h": "73.24",
+        "trend_24h": ["71.313", "71.327", ...],
+        "latency_ms": 632
+      }]
+    }]
   },
   "meta": { "v": 1, "ts": "2026-11-16T01:33:08Z", "latency_ms": 635 }
 }
 ```
 
 With several venues, each asset also carries `spread_pct`, `lowest` and
-`highest`: the cross-venue comparison, precomputed for agents.
+`highest`: the cross-venue comparison, precomputed. `onra watch --json`
+streams NDJSON (a `snapshot`, then `tick` events); pass `--count N` to stop.
+
+<details>
+<summary><b>Errors and exit codes</b></summary>
+
+Errors carry a stable `code`, a `retryable` flag and a `hint`, usually the
+next command to run. If one venue fails, the others still answer and the
+failure is listed under `warnings`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Success (possibly with warnings) |
+| 1 | General error (config, internal) |
+| 2 | Usage error |
+| 3 | Blocked by policy *(M3)* |
+| 4 | Needs human approval *(M3)* |
+| 5 | Venue error, or market not found |
+| 6 | Network error or rate limited, retryable |
+| 7 | Plan expired *(M3)* |
+
+</details>
 
 ## Markets
 
-One identifier scheme across every venue:
+One identifier scheme across every venue: `<base>[/<quote>][-PERP][@<venue>]`
 
+| Identifier | Meaning |
+|---|---|
+| `SOL` | SOL on every venue that lists it |
+| `SOL@jup` | SOL spot on Jupiter |
+| `ETH-PERP@hl` | ETH perpetual on Hyperliquid |
+| `BTC/USDT@bn` | BTC/USDT spot on Binance |
+| `<mint>@jup` | A Solana token by mint address |
+
+Bare symbols only resolve to verified tokens. Solana is full of tokens that
+impersonate real tickers; unverified ones are reachable by mint address and
+are always flagged.
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    P["People<br/>home · menus · commands"] --> C
+    A["AI agents<br/>CLI · JSON · MCP"] --> C
+    N["Natural language<br/>(M4)"] -.-> C
+    C(["Onra<br/>commands &amp; plans"]) -- market data --> V
+    C -- trades --> R["Policy &amp; approval"] --> S["Local signer<br/>keys never leave"] --> V
+    V["Binance · Hyperliquid · Jupiter"]
+    classDef core fill:#f59e0b,stroke:#f59e0b,color:#0d0d10
+    class C core
 ```
-<base>[/<quote>][-PERP][@<venue>]
-```
-
-| Identifier    | Meaning                          |
-|---------------|----------------------------------|
-| `SOL`         | SOL on every venue that lists it |
-| `SOL@jup`     | SOL spot on Jupiter              |
-| `ETH-PERP@hl` | ETH perpetual on Hyperliquid     |
-| `BTC/USDT@bn` | BTC/USDT spot on Binance         |
-| `<mint>@jup`  | A Solana token by mint address   |
-
-Venues today: **Binance** (`bn`), **Hyperliquid** (`hl`), **Jupiter** (`jup`).
-
-Bare symbols only resolve to verified tokens. Solana is full of tokens
-impersonating real tickers; unverified tokens are reachable by mint address
-and are always flagged.
-
-## The machine contract
-
-Agents get a stable, versioned interface:
-
-- **Format.** `--format auto` (the default) renders tables on a terminal and
-  JSON everywhere else. Force either with `--json` or `--format table|plain`.
-- **Numbers are strings.** No floating-point surprises.
-- **Errors are structured**, with a stable `code`, a `retryable` flag and a
-  machine-readable `hint`, usually a command to run next.
-- **Partial results.** If one venue is down, the others still answer, and the
-  failure is reported in `warnings`.
-
-| Exit code | Meaning                                    |
-|-----------|--------------------------------------------|
-| 0         | Success (possibly with warnings)           |
-| 1         | General error (config, internal)           |
-| 2         | Usage error                                |
-| 3         | Blocked by policy *(planned)*              |
-| 4         | Needs human approval *(planned)*           |
-| 5         | Venue error, or market not found           |
-| 6         | Network error, retryable                   |
-| 7         | Plan expired *(planned)*                   |
-
-## Configuration
-
-```console
-$ onra config set network.proxy http://127.0.0.1:7890   # route through a proxy
-$ onra config set ui.color_convention east              # red up, green down
-$ onra config show
-```
-
-Many networks block some venues. Onra honors `--proxy`, then `ONRA_PROXY`,
-then the config file, then the standard `HTTPS_PROXY` / `ALL_PROXY`
-variables. `http://`, `https://` and `socks5://` proxies all work.
-
-Up/down colors default from your system locale: Chinese, Japanese and Korean
-locales show gains in red, as their markets do.
 
 ## Roadmap
 
-| Milestone      | Scope                                                                         |
-|----------------|-------------------------------------------------------------------------------|
-| **M0 Foundation** ✓ | Workspace, output contract, rendering, brand. `onra price` across three venues |
-| **M1 Read-only**    | Balances, positions and orders with credentials; order books; live `watch`    |
-| **M2 Trading**      | Plan → simulate → policy check → execute; local signer daemon; audit log      |
-| **M3 Agents**       | MCP server, scoped agent identities, human approval flow, `onra schema`        |
-| **M4 Dashboard**    | Full-screen TUI                                                               |
+| | Milestone | Scope |
+|:-:|---|---|
+| ✅ | **M0 Foundation** | Output contract, rendering, brand, `price` across three venues |
+| 🚧 | **M1 Interaction** | ✅ home screen, menus, completion, history · ✅ `watch` · ⏳ `search` |
+| ⏳ | **M2 Accounts** | Local keystore, balances, positions, orders, order books |
+| ⏳ | **M3 Trading** | Plan → simulate → policy → confirm → execute, signer daemon, audit log |
+| ⏳ | **M4 Intelligence** | Natural-language assistant (bring your own model), MCP server, agent identities |
+| ⏳ | **M5 Release** | Installers, docs, v0.5 |
 
-The safety model that M2 builds toward: Onra is **non-custodial**, agents
-**never see private keys** (a local signer holds them), every trade is a
-**plan** that is simulated and checked against your policy (limits,
-allowlists, slippage, leverage) before anything is signed, and a single
-`onra halt` freezes every agent.
+## Build in public
 
-## Build from source
-
-Requires Rust 1.88 or newer.
-
-```console
-$ git clone https://github.com/yu7dan/onra
-$ cd onra
-$ cargo build --release
-$ ./target/release/onra price SOL
-```
+Onra is built in the open, one commit at a time. Progress, screenshots and
+design notes are posted on X: **[@bingjie758](https://x.com/bingjie758)**.
+Ideas and issues are welcome.
 
 ## License
 

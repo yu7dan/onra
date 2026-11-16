@@ -14,6 +14,7 @@ use onra_venues::Venues;
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 
+use crate::i18n::{self, fill};
 use crate::price::{self, Report};
 
 const TICKS: usize = 32;
@@ -210,19 +211,24 @@ impl Watch {
             let phase =
                 (now.duration_since(self.started).as_secs_f32() * std::f32::consts::TAU).sin();
             let glow = 0.55 + 0.45 * phase.abs();
-            format!("{} {}", theme.rgb("●", palette::AMBER.rgb.fade(glow)), theme.brand("LIVE"))
+            format!(
+                "{} {}",
+                theme.rgb("●", palette::AMBER.rgb.fade(glow)),
+                theme.brand(i18n::s().live)
+            )
         } else {
-            format!("{} {}", theme.faint("●"), theme.dim("STOPPED"))
+            format!("{} {}", theme.faint("●"), theme.dim(i18n::s().stopped))
         };
-        format!(
-            "  {badge}   {}",
-            theme.faint(&format!(
-                "{markets} markets · every {:.1}s · updated {ago:.1}s ago · {}m{:02}s",
-                interval.as_secs_f32(),
-                running / 60,
-                running % 60
-            ))
-        )
+        let status = fill(
+            i18n::s().watch_status,
+            &[
+                ("markets", &markets.to_string()),
+                ("interval", &format!("{:.1}", interval.as_secs_f32())),
+                ("ago", &format!("{ago:.1}")),
+                ("running", &format!("{}m{:02}s", running / 60, running % 60)),
+            ],
+        );
+        format!("  {badge}   {}", theme.faint(&status))
     }
 }
 
@@ -249,7 +255,7 @@ fn asset_line(asset: &WatchAsset, theme: &Theme, width: usize) -> String {
     let right = match (lows, highs) {
         (Some(lo), Some(hi)) if asset.quotes.len() > 1 && !lo.is_zero() => {
             let spread = ((hi - lo) / lo * Decimal::ONE_HUNDRED).round_dp(2);
-            format!("{} {}", theme.faint("spread"), theme.dim(&format!("{spread}%")))
+            format!("{} {}", theme.faint(i18n::s().spread), theme.dim(&format!("{spread}%")))
         }
         _ => String::new(),
     };
@@ -346,7 +352,7 @@ pub async fn run_terminal(
         lines.extend(w.render(&theme, interval, live));
         if live {
             lines.push(String::new());
-            lines.push(format!("    {}", theme.faint("q / esc to stop")));
+            lines.push(format!("    {}", theme.faint(i18n::s().watch_stop)));
         }
         lines
     };

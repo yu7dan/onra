@@ -42,14 +42,16 @@ pub(crate) fn transport_error(venue: VenueId, e: reqwest::Error) -> Error {
     if e.is_decode() {
         return unexpected(venue, e);
     }
-    let reason = if e.is_timeout() {
-        "timed out"
+    let (cause, reason) = if e.is_timeout() {
+        ("timeout", "timed out")
     } else if e.is_connect() {
-        "connection failed"
+        ("connect", "connection failed")
     } else {
-        "request failed"
+        ("request", "request failed")
     };
     Error::new(ErrorCode::Network, format!("could not reach {venue} ({reason})")).with_hint(json!({
+        "venue": venue.name(),
+        "cause": cause,
         "suggest": "onra config set network.proxy <url>",
         "reason": "if your network blocks this venue, route Onra through a proxy",
     }))
@@ -59,7 +61,8 @@ pub(crate) fn transport_error(venue: VenueId, e: reqwest::Error) -> Error {
 /// can back off instead of treating it as a failure.
 pub(crate) fn status_error(venue: VenueId, status: reqwest::StatusCode) -> Error {
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Error::new(ErrorCode::RateLimited, format!("{venue} is rate limiting requests"));
+        return Error::new(ErrorCode::RateLimited, format!("{venue} is rate limiting requests"))
+            .with_hint(json!({ "venue": venue.name() }));
     }
     unexpected(venue, format!("HTTP {status}"))
 }

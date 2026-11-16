@@ -41,6 +41,7 @@ fn main() -> ExitCode {
             config::Config::default()
         }
     };
+    i18n::set(config.language());
     let out = Output::new(cli.format(), config.convention(), started);
 
     match run(cli, config, &out) {

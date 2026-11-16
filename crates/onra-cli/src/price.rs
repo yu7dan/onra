@@ -16,6 +16,8 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::i18n::{self, fill};
+
 #[derive(Serialize)]
 pub struct Report {
     pub assets: Vec<Asset>,
@@ -129,7 +131,7 @@ pub async fn fetch(
             ErrorCode::MarketNotFound,
             format!("no venue lists `{}`", inputs[qi]),
         )
-        .with_hint(json!({ "tried": tried })));
+        .with_hint(json!({ "query": inputs[qi], "tried": tried })));
     }
     if quotes.iter().all(Vec::is_empty) {
         // Nothing succeeded; surface the first failure as the error.
@@ -225,20 +227,25 @@ pub fn render(report: &Report, theme: &Theme, elapsed: Duration) -> Vec<String> 
     venues.dedup();
     let now = onra_proto::Meta::new(elapsed).ts;
     let clock = now.get(11..19).unwrap_or_default();
-    lines.push(format!(
-        "  {}",
-        theme.faint(&format!(
-            "{} venue{} · {}ms · {clock} UTC",
-            venues.len(),
-            if venues.len() == 1 { "" } else { "s" },
-            elapsed.as_millis()
-        ))
-    ));
+    let s = i18n::s();
+    let count = venues.len().to_string();
+    let venue_count = if venues.len() == 1 {
+        s.venue_one.to_string()
+    } else {
+        fill(s.venue_many, &[("n", &count)])
+    };
+    let ms = elapsed.as_millis().to_string();
+    let footer = fill(s.footer, &[("venues", &venue_count), ("ms", &ms), ("time", clock)]);
+    lines.push(format!("  {}", theme.faint(&footer)));
 
     if !report.warnings.is_empty() {
         lines.push(String::new());
         for w in &report.warnings {
-            lines.push(format!("  {} {}", theme.warn("!"), theme.warn(&w.error.message)));
+            lines.push(format!(
+                "  {} {}",
+                theme.warn("!"),
+                theme.warn(&i18n::error_text(&w.error))
+            ));
         }
         // Venues usually fail for the same reason; give each fix once.
         let mut suggestions: Vec<&str> = Vec::new();
@@ -292,10 +299,11 @@ fn range_bar(asset: &Asset, dp: u32, theme: &Theme) -> Option<(String, String)> 
     // Range labels are context, not quotes: two decimals are plenty above 1.
     let dp = if asset.reference_price >= Decimal::ONE { dp.min(2) } else { dp };
     let (low_s, high_s) = (format::price(low, dp), format::price(high, dp));
-    let plain = format!("24h  {low_s} {} {high_s}", "─".repeat(TRACK));
+    let label = i18n::s().range_24h;
+    let plain = format!("{label}  {low_s} {} {high_s}", "─".repeat(TRACK));
     let styled = format!(
         "{}  {} {}{}{} {}",
-        theme.faint("24h"),
+        theme.faint(label),
         theme.dim(&low_s),
         theme.rgb(&"─".repeat(pos), palette::MUTED),
         theme.brand("●"),
@@ -316,9 +324,10 @@ fn quote_row(quote: &Quote, dp: u32, theme: &Theme) -> Vec<Cell> {
     let market = if t.market.verified {
         Cell::new(&t.market.symbol, theme.rgb(&t.market.symbol, palette::MUTED))
     } else {
+        let unverified = i18n::s().unverified;
         Cell::new(
-            format!("{} unverified", t.market.symbol),
-            format!("{} {}", theme.rgb(&t.market.symbol, palette::MUTED), theme.warn("unverified")),
+            format!("{} {unverified}", t.market.symbol),
+            format!("{} {}", theme.rgb(&t.market.symbol, palette::MUTED), theme.warn(unverified)),
         )
     };
 
@@ -358,10 +367,10 @@ fn spread_line(asset: &Asset, theme: &Theme) -> Option<String> {
     let sep = theme.faint("  ·  ");
     Some(format!(
         "  {} {value}{sep}{} {}{sep}{} {}",
-        theme.faint("spread"),
-        theme.faint("low"),
+        theme.faint(i18n::s().spread),
+        theme.faint(i18n::s().low),
         theme.dim(asset.lowest?.name()),
-        theme.faint("high"),
+        theme.faint(i18n::s().high),
         theme.dim(asset.highest?.name()),
     ))
 }
@@ -431,7 +440,7 @@ impl Loader {
         let mut lines = vec![format!(
             "  {} {}  {}",
             theme.brand(&spin),
-            theme.shimmer("reaching markets", elapsed.as_secs_f32() / 1.4),
+            theme.shimmer(i18n::s().reaching_markets, elapsed.as_secs_f32() / 1.4),
             theme.faint(&format!("{done}/{}", self.venues.len())),
         )];
         let name_width = self.venues.iter().map(|(v, _)| v.name().len()).max().unwrap_or(0);

@@ -144,7 +144,7 @@ impl Hyperliquid {
                         venue_symbol: perp.coin.clone(),
                         verified: true,
                     },
-                    name: (*key == thousand).then(|| format!("1,000 {q} per contract")),
+                    name: None,
                     price: decimal(VENUE, price).ok(),
                     liquidity_usd: None,
                     holders: None,

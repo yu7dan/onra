@@ -115,7 +115,7 @@ pub fn run(config: Config, proxy: Option<String>, theme: Theme) -> Result<ExitCo
         .map_err(|e| Error::new(ErrorCode::Internal, format!("cannot enter raw mode: {e}")))?;
     let _raw = RawMode;
 
-    let shell = Shell::new(config, proxy, theme, venues, Lang::detect(), Editor::with_history());
+    let shell = Shell::new(config, proxy, theme, venues, i18n::lang(), Editor::with_history());
     runtime.block_on(shell.event_loop());
     Ok(ExitCode::SUCCESS)
 }
@@ -680,7 +680,7 @@ impl Shell {
 
     fn print_error(&self, screen: &mut Screen, error: &Error) {
         let mut lines =
-            vec![String::new(), format!("  {} {}", self.theme.warn("✗"), error.message)];
+            vec![String::new(), format!("  {} {}", self.theme.warn("✗"), i18n::error_text(error))];
         if let Some(s) = error.suggestion() {
             lines.push(format!("    {}", self.theme.dim(&format!("→ {s}"))));
         }
@@ -705,7 +705,7 @@ impl Shell {
         let t = &self.theme;
         let width = self.s.help.iter().map(|(c, _)| text::width(c)).max().unwrap_or(0);
         let mut lines = vec![String::new(), format!("  {}", t.strong(self.s.help_title))];
-        for (cmd, desc) in self.s.help {
+        for (cmd, desc) in self.s.help.iter() {
             lines.push(format!("    {}  {}", t.brand(&text::pad(cmd, width)), t.dim(desc)));
         }
         lines.push(String::new());

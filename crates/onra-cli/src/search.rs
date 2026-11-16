@@ -10,6 +10,7 @@ use onra_venues::Venues;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::i18n::{self, fill};
 use crate::price::venue_color;
 
 #[derive(Serialize)]
@@ -41,7 +42,7 @@ pub async fn search(venues: &Venues, query: &str) -> Result<Results> {
             return Err(w.error);
         }
         return Err(Error::new(ErrorCode::MarketNotFound, format!("nothing matches `{query}`"))
-            .with_hint(json!({ "tried": VenueId::ALL.map(|v| v.alias()) })));
+            .with_hint(json!({ "query": query, "tried": VenueId::ALL.map(|v| v.alias()) })));
     }
     Ok(Results { query: query.to_string(), results, warnings })
 }
@@ -83,7 +84,15 @@ pub fn render(r: &Results, theme: &Theme) -> Vec<String> {
         let price = hit.price.map(|p| format::price(p, format::price_dp(p))).unwrap_or_default();
         let price_cell = Cell::new(&price, theme.rgb(&price, palette::PAPER));
 
-        let name = hit.name.clone().unwrap_or_default();
+        // Hyperliquid quotes some assets per thousand units (kBONK).
+        let thousand = venue == VenueId::Hyperliquid
+            && hit.market.base.starts_with('k')
+            && hit.market.base.len() > 1;
+        let name = if thousand {
+            fill(i18n::s().per_contract, &[("n", "1,000"), ("base", &hit.market.base[1..])])
+        } else {
+            hit.name.clone().unwrap_or_default()
+        };
         let name_cell = Cell::new(&name, theme.dim(&name));
 
         let mut detail = Vec::new();
@@ -91,13 +100,13 @@ pub fn render(r: &Results, theme: &Theme) -> Vec<String> {
             detail.push(short_mint(&hit.market.venue_symbol));
         }
         if let Some(liq) = hit.liquidity_usd {
-            detail.push(format!("liq ${}", format::compact(liq)));
+            detail.push(format!("{} ${}", i18n::s().liquidity, format::compact(liq)));
         }
         if let Some(h) = hit.holders {
-            detail.push(format!("{} holders", format::compact(h.into())));
+            detail.push(fill(i18n::s().holders, &[("n", &format::compact(h.into()))]));
         }
         if !hit.market.verified {
-            detail.push("unverified".into());
+            detail.push(i18n::s().unverified.into());
         }
         let detail = detail.join(" · ");
         let detail_cell = if hit.market.verified {
@@ -112,10 +121,9 @@ pub fn render(r: &Results, theme: &Theme) -> Vec<String> {
     let mut lines = vec![String::new()];
     lines.extend(table.render());
     lines.push(String::new());
-    let hint = "use the ✓ symbol, or a mint address with @jup, to price a Solana token";
-    lines.push(format!("  {}", theme.faint(hint)));
+    lines.push(format!("  {}", theme.faint(i18n::s().search_hint)));
     for w in &r.warnings {
-        lines.push(format!("  {} {}", theme.warn("!"), theme.warn(&w.error.message)));
+        lines.push(format!("  {} {}", theme.warn("!"), theme.warn(&i18n::error_text(&w.error))));
     }
     lines.push(String::new());
     lines

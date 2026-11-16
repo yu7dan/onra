@@ -31,6 +31,7 @@ pub fn complete(line: &str) -> Vec<String> {
         ["config"] => CONFIG_ACTIONS.iter().map(|s| s.to_string()).collect(),
         ["config", "set" | "unset"] => KEYS.iter().map(|s| s.to_string()).collect(),
         ["config", "set", "ui.color_convention"] => vec!["east".into(), "west".into()],
+        ["config", "set", "ui.language"] => vec!["auto".into(), "en".into(), "zh".into()],
         [cmd, ..] if *cmd == "price" || *cmd == "watch" => market_options(partial),
         _ => Vec::new(),
     };

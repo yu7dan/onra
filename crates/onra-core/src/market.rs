@@ -46,8 +46,9 @@ impl FromStr for VenueId {
     fn from_str(s: &str) -> Result<Self, Error> {
         let s = s.to_ascii_lowercase();
         VenueId::ALL.into_iter().find(|v| v.alias() == s || v.name() == s).ok_or_else(|| {
-            Error::new(ErrorCode::UnknownVenue, format!("unknown venue `{s}`"))
-                .with_hint(serde_json::json!({ "venues": VenueId::ALL.map(|v| v.alias()) }))
+            Error::new(ErrorCode::UnknownVenue, format!("unknown venue `{s}`")).with_hint(
+                serde_json::json!({ "venue": s, "venues": VenueId::ALL.map(|v| v.alias()) }),
+            )
         })
     }
 }

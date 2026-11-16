@@ -22,6 +22,8 @@ pub enum ErrorCode {
     Venue,
     /// The config file is unreadable or invalid.
     Config,
+    /// An account is not linked, or its credentials are missing or rejected.
+    Credentials,
     /// A bug in Onra.
     Internal,
 }
@@ -34,7 +36,7 @@ impl ErrorCode {
             ErrorCode::Usage | ErrorCode::UnknownVenue => 2,
             ErrorCode::MarketNotFound | ErrorCode::Venue => 5,
             ErrorCode::Network | ErrorCode::RateLimited => 6,
-            ErrorCode::Config | ErrorCode::Internal => 1,
+            ErrorCode::Config | ErrorCode::Credentials | ErrorCode::Internal => 1,
         }
     }
 

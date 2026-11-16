@@ -62,7 +62,7 @@ impl Output {
                 let mut text = format!(
                     "\n  {} {}\n",
                     theme.movement("✗", std::cmp::Ordering::Less),
-                    error.message
+                    crate::i18n::error_text(error)
                 );
                 if let Some(suggest) = error.suggestion() {
                     text.push_str(&format!("    {}\n", theme.dim(&format!("→ {suggest}"))));

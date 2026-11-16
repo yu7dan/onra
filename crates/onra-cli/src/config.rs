@@ -7,11 +7,14 @@ use std::{env, fs};
 
 use onra_core::{Error, ErrorCode, Result};
 use onra_ui::Convention;
+
+use crate::i18n::Lang;
 use onra_venues::NetConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const KEYS: [&str; 3] = ["network.proxy", "network.timeout_ms", "ui.color_convention"];
+pub const KEYS: [&str; 4] =
+    ["network.proxy", "network.timeout_ms", "ui.color_convention", "ui.language"];
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -37,6 +40,9 @@ struct Network {
 struct Ui {
     #[serde(skip_serializing_if = "Option::is_none")]
     color_convention: Option<ConventionSetting>,
+    /// `en`, `zh`, or absent for the system language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
 }
 
 impl Network {
@@ -47,7 +53,7 @@ impl Network {
 
 impl Ui {
     fn is_empty(&self) -> bool {
-        self.color_convention.is_none()
+        self.color_convention.is_none() && self.language.is_none()
     }
 }
 
@@ -121,6 +127,11 @@ impl Config {
                     _ => return Err(invalid("`east` (red up) or `west` (green up)")),
                 });
             }
+            "ui.language" => match value {
+                "auto" => self.ui.language = None,
+                v if Lang::from_tag(v).is_some() => self.ui.language = Some(v.to_ascii_lowercase()),
+                _ => return Err(invalid("`en`, `zh` or `auto`")),
+            },
             _ => return Err(unknown_key(key)),
         }
         Ok(())
@@ -131,6 +142,7 @@ impl Config {
             "network.proxy" => self.network.proxy = None,
             "network.timeout_ms" => self.network.timeout_ms = None,
             "ui.color_convention" => self.ui.color_convention = None,
+            "ui.language" => self.ui.language = None,
             _ => return Err(unknown_key(key)),
         }
         Ok(())
@@ -151,6 +163,15 @@ impl Config {
                 }
             }
         }
+    }
+
+    /// Interface language: `ONRA_LANG`, then `ui.language`, then the system.
+    pub fn language(&self) -> Lang {
+        env::var("ONRA_LANG")
+            .ok()
+            .and_then(|l| Lang::from_tag(&l))
+            .or_else(|| self.ui.language.as_deref().and_then(Lang::from_tag))
+            .unwrap_or_else(Lang::system)
     }
 
     /// Proxy precedence: `--proxy` flag, then `ONRA_PROXY`, then the config
@@ -177,6 +198,14 @@ impl Config {
                 self.network.timeout_ms.is_none(),
             ),
             ("ui.color_convention", json!(convention), self.ui.color_convention.is_none()),
+            (
+                "ui.language",
+                json!(match self.language() {
+                    Lang::En => "en",
+                    Lang::Zh => "zh",
+                }),
+                self.ui.language.is_none(),
+            ),
         ]
     }
 }

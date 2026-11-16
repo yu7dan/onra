@@ -71,7 +71,11 @@ pub fn config(action: ConfigAction, config: &mut Config) -> Result<Outcome> {
                         Value::String(s) => s.clone(),
                         v => v.to_string(),
                     };
-                    let note = if *is_default { theme.faint("  (default)") } else { String::new() };
+                    let note = if *is_default {
+                        theme.faint(&format!("  {}", crate::i18n::s().default_note))
+                    } else {
+                        String::new()
+                    };
                     lines.push(format!("  {key:<22}{}{note}", theme.strong(&shown)));
                 }
                 lines.push(String::new());
@@ -90,7 +94,7 @@ pub fn config(action: ConfigAction, config: &mut Config) -> Result<Outcome> {
             config.unset(&key)?;
             let path = config.save()?;
             Ok(Outcome::new(json!({ "key": key, "path": path }), move |theme| {
-                vec![format!("  {} {key} reset to default", theme.brand("✓"))]
+                vec![format!("  {} {key} {}", theme.brand("✓"), crate::i18n::s().reset_default)]
             }))
         }
     }

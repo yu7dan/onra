@@ -14,23 +14,32 @@ onra-core = { path = "crates/onra-core" }
 onra-proto = { path = "crates/onra-proto" }
 onra-venues = { path = "crates/onra-venues" }
 onra-ui = { path = "crates/onra-ui" }
+onra-keystore = { path = "crates/onra-keystore" }
 
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"
 enable-ansi-support = "0.2"
 futures = "0.3"
+hex = "0.4"
+hmac = "0.12"
 humantime = "2"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+rpassword = "7"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 shell-words = "1"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 serde_json = { version = "1", features = ["preserve_order"] }
 sys-locale = "0.3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 toml = "0.8"
 unicode-width = "0.2"
+zeroize = "1"
 
 [profile.release]
 lto = "thin"

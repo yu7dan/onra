@@ -4,7 +4,9 @@ use rust_decimal::prelude::ToPrimitive;
 use crate::Theme;
 use crate::theme::Rgb;
 
-const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+// No full block: the tallest bar stops short of the cell top, so sparklines
+// on adjacent rows never fuse into one mass.
+const BARS: [char; 7] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇'];
 
 /// Min–max scaled sparkline, one bar per value.
 pub fn sparkline(values: &[Decimal]) -> String {
@@ -42,8 +44,8 @@ mod tests {
 
     #[test]
     fn scales_to_range() {
-        let v: Vec<Decimal> = [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(Decimal::from).collect();
-        assert_eq!(sparkline(&v), "▁▂▃▄▅▆▇█");
+        let v: Vec<Decimal> = [1, 2, 3, 4, 5, 6, 7].into_iter().map(Decimal::from).collect();
+        assert_eq!(sparkline(&v), "▁▂▃▄▅▆▇");
         assert_eq!(sparkline(&[Decimal::ONE, Decimal::ONE]), "▄▄");
         assert_eq!(sparkline(&[]), "");
     }

@@ -8,7 +8,8 @@ mod jupiter;
 mod solana;
 
 use onra_core::{
-    Balance, Market, MarketQuery, Order, Position, Result, SearchHit, Ticker, VenueId,
+    Balance, Error, ErrorCode, FundingRate, Market, MarketQuery, Order, OrderBook, Position,
+    Result, SearchHit, Ticker, VenueId,
 };
 use rust_decimal::Decimal;
 
@@ -140,6 +141,34 @@ impl Venues {
             VenueId::Binance => self.binance.search(query).await,
             VenueId::Hyperliquid => self.hyperliquid.search(query).await,
             VenueId::Jupiter => self.jupiter.search(query).await,
+        }
+    }
+
+    /// The order book for `query` on `venue`, `depth` levels a side.
+    /// `Ok(None)` means the venue doesn't list the market.
+    pub async fn book(
+        &self,
+        venue: VenueId,
+        query: &MarketQuery,
+        depth: usize,
+    ) -> Result<Option<OrderBook>> {
+        match venue {
+            VenueId::Binance => self.binance.book(query, depth).await,
+            VenueId::Hyperliquid => self.hyperliquid.book(query, depth).await,
+            VenueId::Jupiter => Err(Error::new(
+                ErrorCode::Venue,
+                "jupiter has no order book: it routes swaps through AMM pools",
+            )
+            .with_hint(serde_json::json!({ "venue": "jupiter", "cause": "no_book" }))),
+        }
+    }
+
+    /// Funding rates for every perp on `venue`; `None` where there are no perps.
+    pub async fn funding(&self, venue: VenueId) -> Option<Result<Vec<FundingRate>>> {
+        match venue {
+            VenueId::Binance => Some(self.binance.funding().await),
+            VenueId::Hyperliquid => Some(self.hyperliquid.funding().await),
+            VenueId::Jupiter => None,
         }
     }
 

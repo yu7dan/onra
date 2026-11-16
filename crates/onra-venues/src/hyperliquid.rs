@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use onra_core::{
-    Balance, Market, MarketKind, MarketQuery, Order, OrderSide, Position, PositionSide, Result,
-    SearchHit, Ticker, VenueId,
+    Balance, FundingRate, Level, Market, MarketKind, MarketQuery, Order, OrderBook, OrderSide,
+    Position, PositionSide, Result, SearchHit, Ticker, VenueId,
 };
 use reqwest::Client;
 use rust_decimal::Decimal;
@@ -53,6 +53,8 @@ struct AssetCtx {
     mark_px: String,
     mid_px: Option<String>,
     prev_day_px: String,
+    funding: String,
+    open_interest: String,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +157,55 @@ impl Hyperliquid {
             .collect();
         hits.sort_by(|a, b| (a.0, &a.1.market.symbol).cmp(&(b.0, &b.1.market.symbol)));
         Ok(hits.into_iter().take(6).map(|(_, h)| h).collect())
+    }
+
+    /// The perp book for `query`, `depth` levels a side.
+    pub async fn book(&self, query: &MarketQuery, depth: usize) -> Result<Option<OrderBook>> {
+        #[derive(Deserialize)]
+        struct Book {
+            levels: [Vec<RawLevel>; 2],
+        }
+        #[derive(Deserialize)]
+        struct RawLevel {
+            px: String,
+            sz: String,
+        }
+        let perps = self.perps().await?;
+        let Some(perp) = perps.get(&query.base) else { return Ok(None) };
+        let book: Book = self.info(json!({ "type": "l2Book", "coin": perp.coin })).await?;
+        let side = |levels: &[RawLevel]| -> Result<Vec<Level>> {
+            levels
+                .iter()
+                .take(depth)
+                .map(|l| Ok(Level { price: decimal(VENUE, &l.px)?, size: decimal(VENUE, &l.sz)? }))
+                .collect()
+        };
+        Ok(Some(OrderBook {
+            market: Market {
+                venue: VENUE,
+                symbol: format!("{}-PERP", query.base),
+                base: query.base.clone(),
+                kind: MarketKind::Perp,
+                venue_symbol: perp.coin.clone(),
+                verified: true,
+            },
+            bids: side(&book.levels[0])?,
+            asks: side(&book.levels[1])?,
+        }))
+    }
+
+    /// Current hourly funding for every listed perp.
+    pub async fn funding(&self) -> Result<Vec<FundingRate>> {
+        let perps = self.perps().await?;
+        perps
+            .iter()
+            .map(|(key, perp)| {
+                let mark = decimal(VENUE, &perp.ctx.mark_px)?;
+                let oi = decimal(VENUE, &perp.ctx.open_interest)? * mark;
+                let rate = decimal(VENUE, &perp.ctx.funding)?;
+                Ok(FundingRate::new(VENUE, key.clone(), rate, 1, Some(oi.round_dp(0))))
+            })
+            .collect()
     }
 
     pub async fn ping(&self) -> Result<()> {

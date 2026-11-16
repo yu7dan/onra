@@ -73,6 +73,38 @@ Examples:
         query: Vec<String>,
     },
 
+    /// Order book with depth bars.
+    #[command(after_help = "\
+A bare symbol shows Binance spot and Hyperliquid perps one after the other.
+Jupiter routes AMM pools and has no order book.
+
+Examples:
+  onra book ETH
+  onra book BTC-PERP@hl --depth 20")]
+    Book {
+        #[arg(value_name = "MARKET")]
+        market: String,
+        /// Levels per side.
+        #[arg(long, default_value_t = 10)]
+        depth: usize,
+    },
+
+    /// Perp funding rates, annualized so venues compare directly.
+    #[command(after_help = "\
+Hyperliquid funds hourly, Binance every 8 hours (some markets 4h or 1h).
+Rates are shown per interval and annualized; the diff column is the gap.
+
+Examples:
+  onra funding                  the deepest Hyperliquid markets
+  onra funding BTC ETH SOL")]
+    Funding {
+        #[arg(value_name = "ASSET")]
+        assets: Vec<String>,
+        /// How many markets to show without arguments.
+        #[arg(long, default_value_t = 12)]
+        top: usize,
+    },
+
     /// Live prices. Press q or Esc to stop.
     #[command(after_help = "\
 In JSON mode each refresh is one line (NDJSON): a \"snapshot\" event with the

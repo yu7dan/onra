@@ -189,7 +189,7 @@ flowchart LR
 |:-:|---|---|
 | ✅ | **M0 Foundation** | Output contract, rendering, brand, `price` across three venues |
 | ✅ | **M1 Interaction** | Home screen, menus, completion, history · `watch` live prices · `search` with impostor detection |
-| 🚧 | **M2 Accounts** | ✅ keychain-backed accounts, balances, positions, orders, masked totals · ⏳ order books, funding |
+| ✅ | **M2 Accounts** | Keychain-backed accounts, balances, positions, orders, masked totals · order books with depth bars · funding annualized across venues |
 | ⏳ | **M3 Trading** | Plan → simulate → policy → confirm → execute, signer daemon, audit log |
 | ⏳ | **M4 Intelligence** | Natural-language assistant (bring your own model), MCP server, agent identities |
 | ⏳ | **M5 Release** | Installers, docs, v0.5 |

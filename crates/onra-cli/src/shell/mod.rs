@@ -676,6 +676,20 @@ impl Shell {
                     Done::Outcome(commands::price(&venues, &markets, Some(&tx)).await)
                 }))
             }
+            Some(Command::Book { market, depth }) => {
+                let venues = self.venues.clone();
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move {
+                    Done::Outcome(crate::depth::book(&venues, &market, depth).await)
+                }))
+            }
+            Some(Command::Funding { assets, top }) => {
+                let venues = self.venues.clone();
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move {
+                    Done::Outcome(crate::depth::funding(&venues, &assets, top).await)
+                }))
+            }
             Some(Command::Search { query }) => {
                 let venues = self.venues.clone();
                 let query = query.join(" ");

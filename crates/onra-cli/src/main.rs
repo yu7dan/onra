@@ -2,6 +2,7 @@ mod account;
 mod cli;
 mod commands;
 mod config;
+mod depth;
 mod i18n;
 mod output;
 mod price;
@@ -77,6 +78,14 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let theme = out.theme().copied();
             let outcome = block_on(commands::price_with_live_progress(&venues, &markets, theme))??;
             Ok(out.emit(outcome))
+        }
+        Command::Book { market, depth: levels } => {
+            let venues = Venues::new(&config.net(cli.proxy))?;
+            Ok(out.emit(block_on(depth::book(&venues, &market, levels))??))
+        }
+        Command::Funding { assets, top } => {
+            let venues = Venues::new(&config.net(cli.proxy))?;
+            Ok(out.emit(block_on(depth::funding(&venues, &assets, top))??))
         }
         Command::Search { query } => {
             let venues = Venues::new(&config.net(cli.proxy))?;

@@ -1,6 +1,6 @@
 use onra_core::{
-    Balance, Error, ErrorCode, Market, MarketKind, MarketQuery, Order, OrderSide, Result,
-    SearchHit, Ticker, VenueId,
+    Balance, Error, ErrorCode, FundingRate, Level, Market, MarketKind, MarketQuery, Order,
+    OrderBook, OrderSide, Result, SearchHit, Ticker, VenueId,
 };
 use reqwest::{Client, StatusCode};
 use rust_decimal::Decimal;
@@ -11,6 +11,8 @@ use crate::http::{decimal, status_error, transport_error, unexpected};
 const VENUE: VenueId = VenueId::Binance;
 const HOST: &str = "https://api.binance.com";
 const API: &str = "https://api.binance.com/api/v3";
+/// USD-margined futures: read only, for funding rates.
+const FAPI: &str = "https://fapi.binance.com/fapi/v1";
 const STABLES: [&str; 5] = ["USDT", "USDC", "FDUSD", "BUSD", "DAI"];
 const DEFAULT_QUOTE: &str = "USDT";
 /// Binance's error code for a symbol that doesn't exist.
@@ -154,6 +156,99 @@ impl Binance {
             (a.0, a.1, a.2.market.base.len()).cmp(&(b.0, b.1, b.2.market.base.len()))
         });
         Ok(hits.into_iter().take(4).map(|(_, _, h)| h).collect())
+    }
+
+    /// The spot book for `query`, `depth` levels a side.
+    pub async fn book(&self, query: &MarketQuery, depth: usize) -> Result<Option<OrderBook>> {
+        #[derive(Deserialize)]
+        struct Depth {
+            bids: Vec<[String; 2]>,
+            asks: Vec<[String; 2]>,
+        }
+        let quote = query.quote.as_deref().unwrap_or(DEFAULT_QUOTE);
+        let pair = format!("{}{quote}", query.base);
+        // Binance accepts only certain depths; fetch the next one up.
+        let limit = [5, 10, 20, 50, 100].into_iter().find(|l| *l >= depth).unwrap_or(100);
+        let resp = self
+            .http
+            .get(format!("{API}/depth"))
+            .query(&[("symbol", pair.as_str()), ("limit", &limit.to_string())])
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if resp.status() == StatusCode::BAD_REQUEST {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(status_error(VENUE, resp.status()));
+        }
+        let d: Depth = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
+        let side = |levels: &[[String; 2]]| -> Result<Vec<Level>> {
+            levels
+                .iter()
+                .take(depth)
+                .map(|[p, s]| Ok(Level { price: decimal(VENUE, p)?, size: decimal(VENUE, s)? }))
+                .collect()
+        };
+        Ok(Some(OrderBook {
+            market: Market {
+                venue: VENUE,
+                symbol: format!("{}/{quote}", query.base),
+                base: query.base.clone(),
+                kind: MarketKind::Spot,
+                venue_symbol: pair.clone(),
+                verified: true,
+            },
+            bids: side(&d.bids)?,
+            asks: side(&d.asks)?,
+        }))
+    }
+
+    /// Last funding rate of every USDT-margined perp, at its own interval.
+    pub async fn funding(&self) -> Result<Vec<FundingRate>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Premium {
+            symbol: String,
+            last_funding_rate: String,
+            mark_price: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Info {
+            symbol: String,
+            funding_interval_hours: u32,
+        }
+        let get = |path: &'static str| {
+            let http = self.http.clone();
+            async move {
+                let resp = http
+                    .get(format!("{FAPI}/{path}"))
+                    .send()
+                    .await
+                    .map_err(|e| transport_error(VENUE, e))?;
+                if !resp.status().is_success() {
+                    return Err(status_error(VENUE, resp.status()));
+                }
+                Ok(resp)
+            }
+        };
+        let (premium, info) = tokio::try_join!(get("premiumIndex"), get("fundingInfo"))?;
+        let premium: Vec<Premium> = premium.json().await.map_err(|e| transport_error(VENUE, e))?;
+        // fundingInfo lists only symbols whose interval differs from 8h.
+        let info: Vec<Info> = info.json().await.unwrap_or_default();
+        let interval = |symbol: &str| {
+            info.iter().find(|i| i.symbol == symbol).map_or(8, |i| i.funding_interval_hours)
+        };
+        Ok(premium
+            .into_iter()
+            .filter_map(|p| {
+                let asset = p.symbol.strip_suffix("USDT")?.to_string();
+                let rate = decimal(VENUE, &p.last_funding_rate).ok()?;
+                decimal(VENUE, &p.mark_price).ok().filter(|m| !m.is_zero())?;
+                Some(FundingRate::new(VENUE, asset, rate, interval(&p.symbol), None))
+            })
+            .collect())
     }
 
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {

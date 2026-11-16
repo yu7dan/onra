@@ -4,10 +4,12 @@ use onra_core::VenueId;
 
 use crate::config::KEYS;
 
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: [&str; 15] = [
     "price",
     "watch",
     "search",
+    "book",
+    "funding",
     "portfolio",
     "balance",
     "positions",
@@ -49,7 +51,7 @@ pub fn complete(line: &str) -> Vec<String> {
         ["config", "set" | "unset"] => KEYS.iter().map(|s| s.to_string()).collect(),
         ["config", "set", "ui.color_convention"] => vec!["east".into(), "west".into()],
         ["config", "set", "ui.language"] => vec!["auto".into(), "en".into(), "zh".into()],
-        [cmd, ..] if *cmd == "price" || *cmd == "watch" => market_options(partial),
+        [cmd, ..] if ["price", "watch", "book", "funding"].contains(cmd) => market_options(partial),
         _ => Vec::new(),
     };
 

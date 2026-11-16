@@ -26,6 +26,15 @@ pub enum ErrorCode {
     Credentials,
     /// A bug in Onra.
     Internal,
+    /// The trading policy blocks this, or its file or the audit log was
+    /// tampered with.
+    Policy,
+    /// The trade waits for a person to approve it (`onra approve <plan>`).
+    ApprovalRequired,
+    /// The plan is older than its validity window; make a new one.
+    PlanExpired,
+    /// The signer is locked; a person must run `onra unlock`.
+    Locked,
 }
 
 impl ErrorCode {
@@ -36,7 +45,13 @@ impl ErrorCode {
             ErrorCode::Usage | ErrorCode::UnknownVenue => 2,
             ErrorCode::MarketNotFound | ErrorCode::Venue => 5,
             ErrorCode::Network | ErrorCode::RateLimited => 6,
-            ErrorCode::Config | ErrorCode::Credentials | ErrorCode::Internal => 1,
+            ErrorCode::Config
+            | ErrorCode::Credentials
+            | ErrorCode::Internal
+            | ErrorCode::Locked => 1,
+            ErrorCode::Policy => 3,
+            ErrorCode::ApprovalRequired => 4,
+            ErrorCode::PlanExpired => 7,
         }
     }
 

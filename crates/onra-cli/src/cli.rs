@@ -199,6 +199,39 @@ Examples:
     /// Lock the signer now: keys are wiped from memory.
     Lock,
 
+    /// The limits every trade must pass. Changing them asks for the passphrase.
+    #[command(after_help = "\
+The signer checks every trade against these limits before it signs, for
+people and agents alike. Trades an agent starts also wait for your approval
+unless agent_approval is off. The file is sealed: edit it by hand and all
+trading stops until `onra policy reset`.
+
+Examples:
+  onra policy
+  onra policy set max_trade_usd 250
+  onra policy set venues hl,bn
+  onra policy set agent_approval false")]
+    Policy {
+        #[command(subcommand)]
+        action: Option<PolicyAction>,
+    },
+
+    /// Stop all agent trading now. Anyone can halt; resuming needs you.
+    Halt,
+
+    /// Resume agent trading after `onra halt` (asks for the passphrase).
+    Resume,
+
+    /// The sealed record of everything the signer did.
+    Audit {
+        /// How many recent entries to show.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Check that no entry was altered, removed or reordered.
+        #[arg(long)]
+        verify: bool,
+    },
+
     /// Run the signer in the foreground (started for you by `onra unlock`).
     #[command(hide = true)]
     Daemon,
@@ -230,6 +263,16 @@ pub enum AccountAction {
         #[arg(long)]
         remove: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyAction {
+    /// Show the limits and today's usage.
+    Show,
+    /// Change one limit, e.g. `max_trade_usd 250`.
+    Set { key: String, value: String },
+    /// Back to the defaults ($100 a trade, $500 a day, 3x, 1%).
+    Reset,
 }
 
 #[derive(Debug, Subcommand)]

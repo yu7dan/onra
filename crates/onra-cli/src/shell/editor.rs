@@ -17,7 +17,7 @@ pub struct Editor {
 }
 
 fn history_path() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("onra").join("history"))
+    crate::home::data_dir().ok().map(|d| d.join("history"))
 }
 
 impl Editor {

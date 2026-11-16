@@ -8,7 +8,8 @@
 //! can call unlocks it: both need a person at the keyboard.
 
 pub mod daemon;
-mod ipc;
+pub mod guard;
+pub mod ipc;
 
 use std::io::IsTerminal;
 use std::time::Duration;
@@ -30,23 +31,27 @@ use crate::i18n::{self, fill};
 const MIN_PASSPHRASE: usize = 8;
 
 pub fn vault() -> Result<TradingVault> {
-    let dir = dirs::data_dir()
-        .ok_or_else(|| Error::new(ErrorCode::Credentials, "cannot locate the data directory"))?;
-    Ok(TradingVault::new(dir.join("onra").join("trading.json")))
+    Ok(TradingVault::new(crate::home::data_dir()?.join("trading.json")))
 }
 
 /// Unlocking and adding keys need a person: an agent driving Onra through a
 /// pipe gets a clear error to pass on instead of a prompt nobody answers.
-fn require_human(what: &str) -> Result<()> {
+pub(crate) fn require_human(what: &str, suggest: &str) -> Result<()> {
     if std::io::stdin().is_terminal() {
         return Ok(());
     }
     Err(Error::new(ErrorCode::Credentials, format!("{what} needs a person at the keyboard"))
-        .with_hint(json!({ "cause": "needs_human", "suggest": "onra unlock" })))
+        .with_hint(json!({ "cause": "needs_human", "suggest": suggest })))
 }
 
-fn hidden(prompt: &str) -> Result<Zeroizing<String>> {
-    rpassword::prompt_password(prompt)
+/// Reads a line without echoing it. The prompt is printed through std, which
+/// writes UTF-16 to Windows consoles: rpassword prints in the console code
+/// page, which garbles Chinese prompts.
+pub(crate) fn hidden(prompt: &str) -> Result<Zeroizing<String>> {
+    use std::io::Write;
+    print!("{prompt}");
+    let _ = std::io::stdout().flush();
+    rpassword::read_password()
         .map(Zeroizing::new)
         .map_err(|e| Error::new(ErrorCode::Usage, format!("cannot read input: {e}")))
 }
@@ -73,7 +78,7 @@ fn vault_passphrase(vault: &TradingVault) -> Result<Zeroizing<String>> {
 
 /// The daemon's status, or `None` when it isn't running (locked).
 pub async fn status() -> Option<Status> {
-    ipc::call(&ipc::Request::Status).await.ok().flatten()
+    ipc::call_status(&ipc::Request::Status).await.ok().flatten()
 }
 
 pub fn minutes(secs: u64) -> String {
@@ -88,7 +93,7 @@ pub fn minutes(secs: u64) -> String {
 // unlock | lock
 
 pub async fn unlock(ttl: Duration) -> Result<Outcome> {
-    require_human("unlocking the signer")?;
+    require_human("unlocking the signer", "onra unlock")?;
     let vault = vault()?;
     if vault.names()?.is_empty() {
         return Err(Error::new(ErrorCode::Credentials, "no trading keys yet").with_hint(
@@ -98,7 +103,7 @@ pub async fn unlock(ttl: Duration) -> Result<Outcome> {
     let passphrase = hidden(i18n::s().prompt_vault)?;
     ensure_running().await?;
     let request = ipc::Request::Unlock { passphrase, ttl_secs: ttl.as_secs() };
-    let status = ipc::call(&request)
+    let status = ipc::call_status(&request)
         .await?
         .ok_or_else(|| Error::new(ErrorCode::Internal, "the signer stopped unexpectedly"))?;
     let data = serde_json::to_value(&status).expect("status serializes");
@@ -119,13 +124,17 @@ pub async fn unlock(ttl: Duration) -> Result<Outcome> {
                 short(&key.public)
             ));
         }
+        if status.policy_ok == Some(false) {
+            lines.push(String::new());
+            lines.push(format!("  {} {}", theme.warn("!"), s.err_tampered));
+        }
         lines.push(String::new());
         lines
     }))
 }
 
 pub async fn lock() -> Result<Outcome> {
-    let was_running = ipc::call(&ipc::Request::Lock).await?.is_some();
+    let was_running = ipc::call_status(&ipc::Request::Lock).await?.is_some();
     Ok(Outcome::new(json!({ "unlocked": false, "was_running": was_running }), move |theme| {
         let s = i18n::s();
         let text = if was_running { s.locked_ok } else { s.already_locked };
@@ -191,7 +200,7 @@ pub async fn add_key(
     if testnet && venue == VenueId::Jupiter {
         return Err(Error::new(ErrorCode::Usage, "Jupiter has no testnet"));
     }
-    require_human("adding a trading key")?;
+    require_human("adding a trading key", "onra account trade <venue>")?;
     let s = i18n::s();
     let name = entry(venue, testnet);
 

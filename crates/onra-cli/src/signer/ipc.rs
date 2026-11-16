@@ -23,8 +23,15 @@ const MAX_LINE: u64 = 64 * 1024;
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     Status,
-    Unlock { passphrase: Zeroizing<String>, ttl_secs: u64 },
+    Unlock {
+        passphrase: Zeroizing<String>,
+        ttl_secs: u64,
+    },
     Lock,
+    /// Anyone may halt: stopping trading is always safe.
+    Halt,
+    /// Check the audit chain with the seal key the signer holds.
+    Verify,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +42,9 @@ pub struct Status {
     /// Seconds until the daemon locks itself and exits.
     pub expires_in_secs: u64,
     pub keys: Vec<KeyInfo>,
+    /// Whether the policy file's seal checks out (only known when unlocked).
+    #[serde(default)]
+    pub policy_ok: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,13 +58,13 @@ pub struct KeyInfo {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
-    Ok { ok: bool, status: Status },
+    Ok { ok: bool, data: serde_json::Value },
     Err { ok: bool, error: Error },
 }
 
 impl Response {
-    pub fn ok(status: Status) -> Self {
-        Response::Ok { ok: true, status }
+    pub fn ok(data: serde_json::Value) -> Self {
+        Response::Ok { ok: true, data }
     }
 
     pub fn err(error: Error) -> Self {
@@ -74,24 +84,18 @@ fn name() -> io::Result<Name<'static>> {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect();
-    format!("onra-signer-{user}").to_ns_name::<GenericNamespaced>()
+    format!("onra-signer-{user}{}", crate::home::signer_suffix()).to_ns_name::<GenericNamespaced>()
 }
 
 #[cfg(unix)]
 fn name() -> io::Result<Name<'static>> {
     use interprocess::local_socket::GenericFilePath;
     use std::os::unix::fs::PermissionsExt;
-    // XDG_RUNTIME_DIR is already private to the user; otherwise make our own.
-    let dir = match dirs::runtime_dir() {
-        Some(dir) => dir.join("onra"),
-        None => dirs::data_dir()
-            .ok_or_else(|| io::Error::other("cannot locate the data directory"))?
-            .join("onra")
-            .join("run"),
-    };
-    std::fs::create_dir_all(&dir)?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    dir.join("signer.sock").to_fs_name::<GenericFilePath>().map(|n| n.into_owned())
+    let path = socket_path()?;
+    let dir = path.parent().expect("socket path has a directory");
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    path.to_fs_name::<GenericFilePath>().map(|n| n.into_owned())
 }
 
 /// Binds the endpoint. Fails with `AddrInUse` if a daemon is already there.
@@ -102,7 +106,7 @@ pub fn listen() -> io::Result<Listener> {
         // it, so it is safe to replace.
         #[cfg(unix)]
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-            if std::os::unix::net::UnixStream::connect(name_path()?).is_ok() {
+            if std::os::unix::net::UnixStream::connect(socket_path()?).is_ok() {
                 return Err(e);
             }
             ListenerOptions::new().name(name).try_overwrite(true).create_tokio()
@@ -111,11 +115,14 @@ pub fn listen() -> io::Result<Listener> {
     }
 }
 
+/// XDG_RUNTIME_DIR is already private to the user; elsewhere, and for a
+/// custom home, the socket goes in a directory we make private.
 #[cfg(unix)]
-fn name_path() -> io::Result<std::path::PathBuf> {
-    let dir = match dirs::runtime_dir() {
+fn socket_path() -> io::Result<std::path::PathBuf> {
+    let runtime = dirs::runtime_dir().filter(|_| crate::home::signer_suffix().is_empty());
+    let dir = match runtime {
         Some(dir) => dir.join("onra"),
-        None => dirs::data_dir().unwrap_or_default().join("onra").join("run"),
+        None => crate::home::data_dir().map_err(|e| io::Error::other(e.message))?.join("run"),
     };
     Ok(dir.join("signer.sock"))
 }
@@ -143,12 +150,20 @@ pub async fn write_line<T: Serialize>(stream: &Stream, value: &T) -> Result<()> 
 }
 
 /// Sends one request to a running daemon. `None` if no daemon is running.
-pub async fn call(request: &Request) -> Result<Option<Status>> {
+pub async fn call(request: &Request) -> Result<Option<serde_json::Value>> {
     let Some(stream) = connect().await else { return Ok(None) };
     write_line(&stream, request).await?;
     match read_line::<Response>(&stream).await? {
-        Some(Response::Ok { status, .. }) => Ok(Some(status)),
+        Some(Response::Ok { data, .. }) => Ok(Some(data)),
         Some(Response::Err { error, .. }) => Err(error),
         None => Err(ipc_error("the signer closed the connection")),
+    }
+}
+
+/// [`call`] for the requests that answer with the signer's status.
+pub async fn call_status(request: &Request) -> Result<Option<Status>> {
+    match call(request).await? {
+        Some(data) => serde_json::from_value(data).map(Some).map_err(ipc_error),
+        None => Ok(None),
     }
 }

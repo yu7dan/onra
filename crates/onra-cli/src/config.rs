@@ -100,9 +100,9 @@ pub fn path() -> Result<PathBuf> {
     if let Some(p) = env::var_os("ONRA_CONFIG") {
         return Ok(PathBuf::from(p));
     }
-    dirs::config_dir().map(|d| d.join("onra").join("config.toml")).ok_or_else(|| {
-        config_error("cannot determine the config directory; set ONRA_CONFIG".into())
-    })
+    crate::home::config_dir()
+        .map(|d| d.join("config.toml"))
+        .map_err(|_| config_error("cannot determine the config directory; set ONRA_CONFIG".into()))
 }
 
 pub fn load() -> Result<Config> {

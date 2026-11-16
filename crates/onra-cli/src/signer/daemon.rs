@@ -12,11 +12,14 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::traits::tokio::Listener as _;
 use onra_core::{Error, ErrorCode, Result};
+use onra_keystore::SEAL_KEY;
 use onra_keystore::TradingVault;
 use onra_signer::TradingKey;
+use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 use super::ipc::{self, KeyInfo, Request, Response, Status};
-use super::vault;
+use super::{guard, vault};
 
 /// How long a fresh daemon waits for its first unlock.
 const FIRST_UNLOCK: Duration = Duration::from_secs(30);
@@ -25,6 +28,8 @@ pub const MAX_TTL: Duration = Duration::from_secs(12 * 3600);
 
 struct Unlocked {
     keys: BTreeMap<String, TradingKey>,
+    /// Seals the policy file and the audit log.
+    seal: Zeroizing<Vec<u8>>,
     until: Instant,
 }
 
@@ -36,6 +41,7 @@ struct State {
 
 impl State {
     fn status(&self) -> Status {
+        let policy_ok = self.unlocked.as_ref().map(|u| guard::load_policy(&u.seal).is_ok());
         let (unlocked, expires_in_secs, keys) = match &self.unlocked {
             None => (false, 0, Vec::new()),
             Some(u) => (
@@ -53,6 +59,7 @@ impl State {
             unlocked,
             expires_in_secs,
             keys,
+            policy_ok,
         }
     }
 }
@@ -110,7 +117,7 @@ async fn serve(vault: TradingVault) -> Result<()> {
 async fn handle(conn: Stream, state: &Mutex<State>, vault: &TradingVault) {
     let response = match ipc::read_line::<Request>(&conn).await {
         Ok(Some(request)) => match apply(request, state, vault) {
-            Ok(status) => Response::ok(status),
+            Ok(data) => Response::ok(data),
             Err(e) => Response::err(e),
         },
         Ok(None) => return,
@@ -119,26 +126,61 @@ async fn handle(conn: Stream, state: &Mutex<State>, vault: &TradingVault) {
     let _ = ipc::write_line(&conn, &response).await;
 }
 
-fn apply(request: Request, state: &Mutex<State>, vault: &TradingVault) -> Result<Status> {
+fn status(s: &State) -> Value {
+    serde_json::to_value(s.status()).expect("status serializes")
+}
+
+fn locked() -> Error {
+    Error::new(ErrorCode::Locked, "the signer is locked")
+        .with_hint(json!({ "cause": "locked", "suggest": "onra unlock" }))
+}
+
+fn apply(request: Request, state: &Mutex<State>, vault: &TradingVault) -> Result<Value> {
     match request {
-        Request::Status => Ok(state.lock().expect("state lock").status()),
+        Request::Status => Ok(status(&state.lock().expect("state lock"))),
         Request::Unlock { passphrase, ttl_secs } => {
             // Always re-read the vault: this also picks up keys added since.
             let secrets = vault.unlock(&passphrase)?;
             let mut keys = BTreeMap::new();
-            for (name, secret) in secrets.iter() {
+            for (name, secret) in secrets.iter().filter(|(n, _)| !n.starts_with('_')) {
                 keys.insert(name.clone(), TradingKey::decode(name, secret)?);
             }
+            let seal = guard::seal_bytes(&secrets[SEAL_KEY])?;
             let ttl = Duration::from_secs(ttl_secs).min(MAX_TTL);
             let mut s = state.lock().expect("state lock");
-            s.unlocked = Some(Unlocked { keys, until: Instant::now() + ttl });
-            Ok(s.status())
+            s.unlocked = Some(Unlocked { keys, seal, until: Instant::now() + ttl });
+            Ok(status(&s))
         }
         Request::Lock => {
             let mut s = state.lock().expect("state lock");
             s.unlocked = None;
             s.stop = true;
-            Ok(s.status())
+            Ok(status(&s))
+        }
+        Request::Halt => {
+            guard::set_halt_file(true)?;
+            let s = state.lock().expect("state lock");
+            // Sealing the halt into the log makes it outlive the file.
+            let logged = match &s.unlocked {
+                Some(u) => {
+                    guard::audit_log()?.append(
+                        &u.seal,
+                        guard::now_ms(),
+                        guard::HALT,
+                        None,
+                        json!({}),
+                    )?;
+                    true
+                }
+                None => false,
+            };
+            Ok(json!({ "halted": true, "logged": logged }))
+        }
+        Request::Verify => {
+            let s = state.lock().expect("state lock");
+            let u = s.unlocked.as_ref().ok_or_else(locked)?;
+            let entries = guard::audit_log()?.verify(&u.seal)?;
+            Ok(json!({ "entries": entries, "intact": true }))
         }
     }
 }
@@ -162,21 +204,22 @@ mod tests {
         vault.insert("hl.testnet", HL, "passphrase").unwrap();
         let state = Mutex::new(State::default());
 
-        let locked = apply(Request::Status, &state, &vault).unwrap();
+        let st = |r| serde_json::from_value::<Status>(apply(r, &state, &vault).unwrap()).unwrap();
+        let locked = st(Request::Status);
         assert!(!locked.unlocked && locked.keys.is_empty());
         assert!(apply(unlock("wrong", 60), &state, &vault).is_err());
 
-        let open = apply(unlock("passphrase", 900), &state, &vault).unwrap();
+        let open = st(unlock("passphrase", 900));
         assert!(open.unlocked && open.expires_in_secs == 900);
         assert_eq!(open.keys.len(), 1);
         assert_eq!(open.keys[0].name, "hl.testnet");
         assert_eq!(open.keys[0].public, "0x2c7536E3605D9C16a7a3D7b1898e529396a65c23");
 
         // Nobody can hold it open longer than the cap.
-        let long = apply(unlock("passphrase", 999_999), &state, &vault).unwrap();
+        let long = st(unlock("passphrase", 999_999));
         assert_eq!(long.expires_in_secs, MAX_TTL.as_secs());
 
-        let after = apply(Request::Lock, &state, &vault).unwrap();
+        let after = st(Request::Lock);
         assert!(!after.unlocked && after.keys.is_empty());
         assert!(state.lock().unwrap().stop);
     }

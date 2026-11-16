@@ -769,6 +769,49 @@ impl Shell {
                 None
             }
             Some(Command::Daemon) => None,
+            // Reading the policy needs nothing; changing it needs a prompt.
+            Some(Command::Policy { action: None | Some(crate::cli::PolicyAction::Show) }) => {
+                match crate::policy::policy(None) {
+                    Ok(outcome) => {
+                        let lines = self.outcome_lines(outcome, json);
+                        self.print(screen, &lines);
+                    }
+                    Err(e) => self.print_error(screen, &e),
+                }
+                None
+            }
+            Some(Command::Policy { .. } | Command::Resume) => {
+                self.print_error(
+                    screen,
+                    &Error::new(
+                        ErrorCode::Usage,
+                        "this asks for the passphrase; use a regular terminal",
+                    )
+                    .with_hint(serde_json::json!({ "suggest": "onra policy set <key> <value>" })),
+                );
+                None
+            }
+            Some(Command::Halt) => {
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move { Done::Outcome(crate::policy::halt().await) }))
+            }
+            Some(Command::Audit { limit, verify: false }) => {
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(
+                    async move { Done::Outcome(crate::policy::audit(limit, false).await) },
+                ))
+            }
+            Some(Command::Audit { verify: true, .. }) => {
+                self.print_error(
+                    screen,
+                    &Error::new(
+                        ErrorCode::Usage,
+                        "verifying may ask for the passphrase; use a regular terminal",
+                    )
+                    .with_hint(serde_json::json!({ "suggest": "onra audit --verify" })),
+                );
+                None
+            }
             Some(Command::Lock) => {
                 self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
                 Some(Box::pin(async move { Done::Outcome(crate::signer::lock().await) }))

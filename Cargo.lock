@@ -1739,10 +1739,12 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures",
+ "hex",
  "humantime",
  "interprocess",
  "onra-core",
  "onra-keystore",
+ "onra-policy",
  "onra-proto",
  "onra-signer",
  "onra-ui",
@@ -1781,6 +1783,20 @@ dependencies = [
  "serde",
  "serde_json",
  "zeroize",
+]
+
+[[package]]
+name = "onra-policy"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hmac 0.12.1",
+ "onra-core",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "toml",
 ]
 
 [[package]]

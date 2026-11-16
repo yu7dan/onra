@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::{Error, ErrorCode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VenueId {
     Binance,

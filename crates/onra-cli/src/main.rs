@@ -3,8 +3,10 @@ mod cli;
 mod commands;
 mod config;
 mod depth;
+mod home;
 mod i18n;
 mod output;
+mod policy;
 mod price;
 mod search;
 mod shell;
@@ -126,6 +128,10 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
         Command::Unlock { ttl } => Ok(out.emit(block_on(signer::unlock(ttl))??)),
         Command::Lock => Ok(out.emit(block_on(signer::lock())??)),
         Command::Daemon => signer::daemon::run(),
+        Command::Policy { action } => Ok(out.emit(policy::policy(action)?)),
+        Command::Halt => Ok(out.emit(block_on(policy::halt())??)),
+        Command::Resume => Ok(out.emit(policy::resume()?)),
+        Command::Audit { limit, verify } => Ok(out.emit(block_on(policy::audit(limit, verify))??)),
         Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }
 }

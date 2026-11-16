@@ -221,7 +221,7 @@ impl TradingVault {
     /// Entry names, readable without the passphrase.
     pub fn names(&self) -> Result<Vec<String>> {
         let Some(vault) = self.store.load()? else { return Ok(Vec::new()) };
-        Ok(vault.entries.into_keys().filter(|n| n != CHECK).collect())
+        Ok(vault.entries.into_keys().filter(|n| !n.starts_with('_')).collect())
     }
 
     /// Adds or replaces an entry, creating the vault on first use.
@@ -239,23 +239,43 @@ impl TradingVault {
         let cipher = vault.cipher(passphrase)?;
         open_check(&cipher, &vault)?;
         vault.entries.insert(name.to_string(), seal(&cipher, name, secret));
+        ensure_seal_key(&cipher, &mut vault);
         self.store.save(&vault)
     }
 
     /// Opens every entry at once: the daemon holds them until it locks.
+    /// Includes [`SEAL_KEY`].
     pub fn unlock(&self, passphrase: &str) -> Result<BTreeMap<String, Secret>> {
-        let vault = self.store.load()?.ok_or_else(|| {
+        let mut vault = self.store.load()?.ok_or_else(|| {
             Error::new(ErrorCode::Credentials, "no trading keys yet")
-                .with_hint(serde_json::json!({ "suggest": "onra account trade <venue>" }))
+                .with_hint(serde_json::json!({ "cause": "no_trading_keys", "suggest": "onra account trade <venue>" }))
         })?;
         let cipher = vault.cipher(passphrase)?;
         open_check(&cipher, &vault)?;
+        if ensure_seal_key(&cipher, &mut vault) {
+            self.store.save(&vault)?;
+        }
         vault
             .entries
             .iter()
             .filter(|(name, _)| *name != CHECK)
             .map(|(name, sealed)| Ok((name.clone(), open(&cipher, name, sealed)?)))
             .collect()
+    }
+
+    /// Just the seal key, for changing the policy without opening any
+    /// trading key.
+    pub fn seal_key(&self, passphrase: &str) -> Result<Secret> {
+        let mut vault = self.store.load()?.ok_or_else(|| {
+            Error::new(ErrorCode::Credentials, "no trading vault yet")
+                .with_hint(serde_json::json!({ "cause": "no_trading_keys", "suggest": "onra account trade <venue>" }))
+        })?;
+        let cipher = vault.cipher(passphrase)?;
+        open_check(&cipher, &vault)?;
+        if ensure_seal_key(&cipher, &mut vault) {
+            self.store.save(&vault)?;
+        }
+        open(&cipher, SEAL_KEY, &vault.entries[SEAL_KEY])
     }
 
     /// Removes an entry. Needs no passphrase: deleting a key never spends it.
@@ -267,6 +287,22 @@ impl TradingVault {
         }
         Ok(found)
     }
+}
+
+/// The random key that seals the policy file and the audit log. Created
+/// with the vault; only someone with the passphrase can use it.
+pub const SEAL_KEY: &str = "_seal";
+
+/// Adds the seal key if the vault lacks one. Returns whether it changed.
+fn ensure_seal_key(cipher: &ChaCha20Poly1305, vault: &mut Vault) -> bool {
+    if vault.entries.contains_key(SEAL_KEY) {
+        return false;
+    }
+    let mut key = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(key.as_mut());
+    let encoded = Zeroizing::new(hex::encode(key.as_ref()));
+    vault.entries.insert(SEAL_KEY.into(), seal(cipher, SEAL_KEY, &encoded));
+    true
 }
 
 fn open_check(cipher: &ChaCha20Poly1305, vault: &Vault) -> Result<()> {
@@ -350,6 +386,10 @@ mod tests {
 
         let keys = vault.unlock("pw").unwrap();
         assert_eq!(keys["hl"].as_str(), "0xabc");
+        let seal = vault.seal_key("pw").unwrap();
+        assert_eq!(seal.len(), 64);
+        assert_eq!(keys[SEAL_KEY], seal, "one seal key, stable across opens");
+        assert!(vault.seal_key("nope").is_err());
         assert!(vault.unlock("nope").is_err());
 
         assert!(vault.remove("hl").unwrap());

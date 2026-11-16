@@ -16,6 +16,7 @@ onra-venues = { path = "crates/onra-venues" }
 onra-ui = { path = "crates/onra-ui" }
 onra-keystore = { path = "crates/onra-keystore" }
 onra-signer = { path = "crates/onra-signer" }
+onra-policy = { path = "crates/onra-policy" }
 
 argon2 = "0.5"
 bs58 = "0.5"

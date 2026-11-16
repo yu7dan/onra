@@ -32,9 +32,7 @@ const HIDDEN: &str = "••••";
 const MAX_ORDERS_SHOWN: usize = 15;
 
 pub fn keystore() -> Result<Keystore> {
-    let dir = dirs::data_dir()
-        .ok_or_else(|| Error::new(ErrorCode::Credentials, "cannot locate the data directory"))?;
-    Ok(Keystore::new(dir.join("onra").join("keystore.json")))
+    Ok(Keystore::new(crate::home::data_dir()?.join("keystore.json")))
 }
 
 /// Only asked for when the system keychain is unavailable.
@@ -48,9 +46,7 @@ fn passphrase() -> Result<Secret> {
             "the keystore needs a passphrase; set ONRA_KEYSTORE_PASSPHRASE",
         ));
     }
-    rpassword::prompt_password(i18n::s().prompt_passphrase)
-        .map(Zeroizing::new)
-        .map_err(|e| Error::new(ErrorCode::Credentials, format!("cannot read passphrase: {e}")))
+    signer::hidden(i18n::s().prompt_passphrase)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -253,9 +249,7 @@ async fn login(venue: &str, config: &mut Config, venues: &Venues) -> Result<Outc
         }
         _ => {
             let key = read_line(s.prompt_key)?;
-            let secret = rpassword::prompt_password(s.prompt_secret)
-                .map(Zeroizing::new)
-                .map_err(|e| Error::new(ErrorCode::Usage, format!("cannot read input: {e}")))?;
+            let secret = signer::hidden(s.prompt_secret)?;
             BinanceKey { key, secret }
         }
     };

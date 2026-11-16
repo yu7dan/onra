@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
-use crate::http::{decimal, pct_change, transport_error, unexpected};
+use crate::http::{decimal, pct_change, status_error, transport_error, unexpected};
 
 const VENUE: VenueId = VenueId::Hyperliquid;
 const INFO_URL: &str = "https://api.hyperliquid.xyz/info";
@@ -83,7 +83,7 @@ impl Hyperliquid {
             .await
             .map_err(|e| transport_error(VENUE, e))?;
         if !resp.status().is_success() {
-            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+            return Err(status_error(VENUE, resp.status()));
         }
         resp.json().await.map_err(|e| transport_error(VENUE, e))
     }
@@ -112,6 +112,15 @@ impl Hyperliquid {
         );
         *cache = Some((Instant::now(), perps.clone()));
         Ok(perps)
+    }
+
+    /// Mid price for a coin, from the shared short-lived snapshot.
+    pub async fn quote(&self, coin: &str) -> Result<Decimal> {
+        let perps = self.perps().await?;
+        let perp = perps
+            .get(&coin.to_ascii_uppercase())
+            .ok_or_else(|| unexpected(VENUE, format!("unknown coin {coin}")))?;
+        decimal(VENUE, perp.ctx.mid_px.as_deref().unwrap_or(&perp.ctx.mark_px))
     }
 
     pub async fn ping(&self) -> Result<()> {

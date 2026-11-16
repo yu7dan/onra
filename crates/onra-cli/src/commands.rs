@@ -96,12 +96,25 @@ pub async fn price_with_live_progress(
     markets: &[String],
     theme: Option<Theme>,
 ) -> Result<Outcome> {
+    let started = Instant::now();
+    let report = report_with_live_progress(venues, markets, theme).await?;
+    let elapsed = started.elapsed();
+    let data = serde_json::to_value(&report).expect("report serializes");
+    Ok(Outcome::new(data, move |theme| price::render(&report, theme, elapsed)))
+}
+
+/// Fetch a price report, showing per-venue progress in place on a terminal.
+pub async fn report_with_live_progress(
+    venues: &Venues,
+    markets: &[String],
+    theme: Option<Theme>,
+) -> Result<price::Report> {
     let Some(theme) = theme.filter(|_| onra_ui::motion::motion_enabled()) else {
-        return price(venues, markets, None).await;
+        return price::fetch(venues, markets, None).await;
     };
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let started = Instant::now();
-    let work = price(venues, markets, Some(&tx));
+    let work = price::fetch(venues, markets, Some(&tx));
     tokio::pin!(work);
 
     let mut loader = price::Loader::default();

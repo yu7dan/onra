@@ -32,13 +32,28 @@ use crate::commands::{self, Outcome};
 use crate::config::Config;
 use crate::i18n::{self, Lang, Strings};
 use crate::price::{self, Loader, Progress};
+use crate::watch::{self, Update, Watch};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PING_EVERY: Duration = Duration::from_secs(60);
 /// Menu entries that work today; the rest show as "coming soon".
-const MENU_READY: [bool; 6] = [true, false, false, false, true, true];
+const MENU_READY: [bool; 6] = [true, true, false, false, true, true];
 
-type Task = Pin<Box<dyn Future<Output = Result<Outcome>>>>;
+/// What a finished background task produced.
+enum Done {
+    Outcome(Result<Outcome>),
+    Watch(Result<price::Report>),
+}
+
+type Task = Pin<Box<dyn Future<Output = Done>>>;
+type Polling = Pin<Box<dyn Future<Output = Vec<Update>>>>;
+
+/// What the asset picker leads to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Price,
+    Watch,
+}
 type Ping = Pin<Box<dyn Future<Output = (VenueId, Result<Duration>)>>>;
 
 enum Mode {
@@ -47,6 +62,7 @@ enum Mode {
     PickAsset,
     PickVenue { asset: String },
     Busy { started: Instant, loader: Loader, json: bool },
+    Watching { watch: Watch, interval: Duration, next_poll: Instant },
 }
 
 enum Health {
@@ -64,6 +80,8 @@ struct Shell {
     mode: Mode,
     menu: usize,
     pick: usize,
+    purpose: Purpose,
+    watch_interval: Duration,
     editor: Editor,
     /// Completion candidates being cycled with Tab, and the current one.
     tab: Option<(Vec<String>, usize)>,
@@ -120,6 +138,8 @@ impl Shell {
             mode: Mode::Menu,
             menu: 0,
             pick: 0,
+            purpose: Purpose::Price,
+            watch_interval: Duration::from_millis(1500),
             editor,
             tab: None,
             note: None,
@@ -135,6 +155,7 @@ impl Shell {
         let mut tick = tokio::time::interval(Duration::from_millis(80));
         let (tx, mut rx) = mpsc::unbounded_channel::<Progress>();
         let mut task: Option<Task> = None;
+        let mut polling: Option<Polling> = None;
         let mut pings = self.ping_all();
         screen.draw(&self.frame());
 
@@ -149,6 +170,9 @@ impl Shell {
                             if matches!(self.mode, Mode::Input | Mode::Menu) && task.is_some() {
                                 // A key cancelled the running task.
                                 task = None;
+                            }
+                            if !matches!(self.mode, Mode::Watching { .. }) {
+                                polling = None;
                             }
                         }
                         Some(Ok(Event::Resize(..))) => screen.reset(),
@@ -169,13 +193,30 @@ impl Shell {
                     task = None;
                     self.finish(result, &mut screen);
                 }
+                updates = async { polling.as_mut().expect("guarded by condition").await }, if polling.is_some() => {
+                    polling = None;
+                    if let Mode::Watching { watch, .. } = &mut self.mode {
+                        watch.apply(updates);
+                    }
+                }
                 Some((venue, result)) = pings.next(), if !pings.is_empty() => {
                     self.set_health(venue, result.map_or(Health::Down, Health::Up));
                     screen.draw(&self.frame());
                 }
                 _ = tick.tick() => {
                     let checking = self.health.iter().any(|(_, h)| matches!(h, Health::Checking));
-                    if matches!(self.mode, Mode::Busy { .. }) || checking {
+                    if let Mode::Watching { watch, interval, next_poll } = &mut self.mode
+                        && polling.is_none()
+                        && Instant::now() >= *next_poll
+                    {
+                        let venues = self.venues.clone();
+                        let markets = watch.markets_due(*interval);
+                        if !markets.is_empty() {
+                            polling = Some(Box::pin(async move { watch::poll(&venues, markets).await }));
+                        }
+                        *next_poll = Instant::now() + *interval;
+                    }
+                    if matches!(self.mode, Mode::Busy { .. } | Mode::Watching { .. }) || checking {
                         screen.draw(&self.frame());
                     }
                     if pings.is_empty() && self.last_ping.elapsed() >= PING_EVERY {
@@ -227,6 +268,7 @@ impl Shell {
                     self.mode = Mode::Input;
                     self.note = Some(self.theme.faint(self.s.cancelled));
                 }
+                Mode::Watching { .. } => self.stop_watch(screen),
                 _ if !self.editor.is_empty() => self.editor.clear(),
                 _ => self.quit = true,
             }
@@ -237,8 +279,11 @@ impl Shell {
             Mode::Busy { .. } => None,
             Mode::Menu => self.on_menu_key(key, screen, tx),
             Mode::Input => self.on_input_key(key, ctrl, screen, tx),
-            Mode::PickAsset => {
-                self.on_pick_asset_key(key, ctrl);
+            Mode::PickAsset => self.on_pick_asset_key(key, ctrl, screen, tx),
+            Mode::Watching { .. } => {
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('q' | 'Q')) {
+                    self.stop_watch(screen);
+                }
                 None
             }
             Mode::PickVenue { .. } => self.on_pick_venue_key(key, screen, tx),
@@ -276,9 +321,10 @@ impl Shell {
             return None;
         }
         match self.menu {
-            0 => {
+            0 | 1 => {
                 self.editor.clear();
                 self.pick = 0;
+                self.purpose = if self.menu == 0 { Purpose::Price } else { Purpose::Watch };
                 self.mode = Mode::PickAsset;
                 None
             }
@@ -370,7 +416,13 @@ impl Shell {
         POPULAR.iter().copied().filter(|s| s.starts_with(typed.trim())).take(6).collect()
     }
 
-    fn on_pick_asset_key(&mut self, key: KeyEvent, ctrl: bool) {
+    fn on_pick_asset_key(
+        &mut self,
+        key: KeyEvent,
+        ctrl: bool,
+        screen: &mut Screen,
+        tx: &UnboundedSender<Progress>,
+    ) -> Option<Task> {
         let options = self.asset_options();
         match key.code {
             KeyCode::Esc => {
@@ -386,10 +438,15 @@ impl Shell {
                 let asset = match options.get(self.pick) {
                     Some(s) => s.to_string(),
                     None if !typed.is_empty() => typed,
-                    None => return,
+                    None => return None,
                 };
                 self.editor.clear();
                 self.pick = 0;
+                if self.purpose == Purpose::Watch {
+                    let line = format!("watch {asset}");
+                    self.editor.commit(&line);
+                    return self.run_line(&line, screen, tx);
+                }
                 self.mode = Mode::PickVenue { asset };
             }
             KeyCode::Backspace => {
@@ -402,6 +459,7 @@ impl Shell {
             }
             _ => {}
         }
+        None
     }
 
     fn on_pick_venue_key(
@@ -486,14 +544,11 @@ impl Shell {
                 self.print(screen, &self.help_lines());
                 return None;
             }
-            "price" if words.len() == 1 => {
+            "price" | "watch" if words.len() == 1 => {
                 self.editor.clear();
                 self.pick = 0;
+                self.purpose = if first == "price" { Purpose::Price } else { Purpose::Watch };
                 self.mode = Mode::PickAsset;
-                return None;
-            }
-            "watch" => {
-                self.note = Some(self.theme.faint(self.s.watch_soon));
                 return None;
             }
             _ => {}
@@ -532,7 +587,19 @@ impl Shell {
                 let venues = self.venues.clone();
                 let tx = tx.clone();
                 self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
-                Some(Box::pin(async move { commands::price(&venues, &markets, Some(&tx)).await }))
+                Some(Box::pin(async move {
+                    Done::Outcome(commands::price(&venues, &markets, Some(&tx)).await)
+                }))
+            }
+            Some(Command::Watch { markets, interval, .. }) => {
+                let venues = self.venues.clone();
+                let tx = tx.clone();
+                self.watch_interval = Duration::from_secs_f64(interval.clamp(0.2, 3600.0));
+                self.mode =
+                    Mode::Busy { started: Instant::now(), loader: Loader::default(), json: false };
+                Some(Box::pin(async move {
+                    Done::Watch(price::fetch(&venues, &markets, Some(&tx)).await)
+                }))
             }
             Some(Command::Config { action }) => {
                 let rewires = matches!(&action, ConfigAction::Set { key, .. } | ConfigAction::Unset { key } if key.starts_with("network."));
@@ -560,16 +627,34 @@ impl Shell {
         }
     }
 
-    fn finish(&mut self, result: Result<Outcome>, screen: &mut Screen) {
+    fn finish(&mut self, done: Done, screen: &mut Screen) {
         let json = matches!(self.mode, Mode::Busy { json: true, .. });
         self.mode = Mode::Input;
-        match result {
-            Ok(outcome) => {
+        match done {
+            Done::Outcome(Ok(outcome)) => {
                 let lines = self.outcome_lines(outcome, json);
                 self.print(screen, &lines);
             }
-            Err(e) => self.print_error(screen, &e),
+            Done::Watch(Ok(report)) => {
+                let interval = self.watch_interval;
+                let watch = Watch::from_report(&report);
+                self.mode =
+                    Mode::Watching { watch, interval, next_poll: Instant::now() + interval };
+            }
+            Done::Outcome(Err(e)) | Done::Watch(Err(e)) => self.print_error(screen, &e),
         }
+    }
+
+    /// End a watch, keeping its last frame in the scrollback.
+    fn stop_watch(&mut self, screen: &mut Screen) {
+        let Mode::Watching { watch, interval, .. } = std::mem::replace(&mut self.mode, Mode::Input)
+        else {
+            return;
+        };
+        let mut lines = vec![String::new()];
+        lines.extend(watch.render(&self.theme, interval, false));
+        lines.push(String::new());
+        self.print(screen, &lines);
     }
 
     fn outcome_lines(&self, outcome: Outcome, json: bool) -> Vec<String> {
@@ -652,7 +737,7 @@ impl Shell {
         lines.push(format!("    {}", t.faint(self.hints())));
 
         let cursor = match self.mode {
-            Mode::Busy { .. } | Mode::PickVenue { .. } => None,
+            Mode::Busy { .. } | Mode::PickVenue { .. } | Mode::Watching { .. } => None,
             _ => Some((input_row, 3 + col.min(inner.saturating_sub(1)))),
         };
         Frame { lines, cursor }
@@ -748,6 +833,7 @@ impl Shell {
                 }
                 lines
             }
+            Mode::Watching { watch, interval, .. } => watch.render(t, *interval, true),
             Mode::Busy { started, loader, .. } => {
                 let elapsed = started.elapsed();
                 if elapsed < price::LOADER_DELAY { Vec::new() } else { loader.lines(t, elapsed) }
@@ -772,7 +858,7 @@ impl Shell {
         let content = match &self.mode {
             Mode::Menu if typed.is_empty() => t.faint(self.s.placeholder),
             Mode::PickAsset if typed.is_empty() => t.faint(self.s.pick_asset_hint),
-            Mode::PickVenue { .. } | Mode::Busy { .. } => String::new(),
+            Mode::PickVenue { .. } | Mode::Busy { .. } | Mode::Watching { .. } => String::new(),
             _ => {
                 let ghost =
                     self.suggestion().map(|s| s[typed.len()..].to_string()).unwrap_or_default();
@@ -788,6 +874,7 @@ impl Shell {
             Mode::Input => self.s.hints_input,
             Mode::PickAsset | Mode::PickVenue { .. } => self.s.hints_pick,
             Mode::Busy { .. } => self.s.hints_busy,
+            Mode::Watching { .. } => self.s.hints_watch,
         }
     }
 }
@@ -822,6 +909,8 @@ mod tests {
             (VenueId::Jupiter, Health::Down),
         ];
         frames.push(("menu", sh.frame()));
+        sh.set_health(VenueId::Jupiter, Health::Up(Duration::from_millis(180)));
+        frames.push(("menu-online", sh.frame()));
 
         sh.mode = Mode::Input;
         sh.editor.set("pri");

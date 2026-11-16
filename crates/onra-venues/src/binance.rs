@@ -3,7 +3,7 @@ use reqwest::{Client, StatusCode};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::http::{decimal, transport_error, unexpected};
+use crate::http::{decimal, status_error, transport_error, unexpected};
 
 const VENUE: VenueId = VenueId::Binance;
 const API: &str = "https://api.binance.com/api/v3";
@@ -43,9 +43,29 @@ impl Binance {
             .await
             .map_err(|e| transport_error(VENUE, e))?;
         if !resp.status().is_success() {
-            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+            return Err(status_error(VENUE, resp.status()));
         }
         Ok(())
+    }
+
+    /// Last price only, for polling an already-resolved market.
+    pub async fn quote(&self, pair: &str) -> Result<Decimal> {
+        #[derive(Deserialize)]
+        struct Price {
+            price: String,
+        }
+        let resp = self
+            .http
+            .get(format!("{API}/ticker/price"))
+            .query(&[("symbol", pair)])
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(status_error(VENUE, resp.status()));
+        }
+        let p: Price = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
+        decimal(VENUE, &p.price)
     }
 
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {
@@ -75,7 +95,7 @@ impl Binance {
                     "binance is not available from your current location",
                 ));
             }
-            s => return Err(unexpected(VENUE, format!("HTTP {s}"))),
+            s => return Err(status_error(VENUE, s)),
         }
 
         let t: Ticker24h = resp.json().await.map_err(|e| transport_error(VENUE, e))?;

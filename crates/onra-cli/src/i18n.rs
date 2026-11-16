@@ -27,13 +27,13 @@ pub struct Strings {
     pub pick_asset_hint: &'static str,
     pub pick_venue: &'static str,
     pub all_venues: &'static str,
-    pub watch_soon: &'static str,
+    pub hints_watch: &'static str,
     pub nl_soon: &'static str,
     pub nl_try: &'static str,
     pub cancelled: &'static str,
     pub bye: &'static str,
     pub help_title: &'static str,
-    pub help: [(&'static str, &'static str); 7],
+    pub help: [(&'static str, &'static str); 8],
     pub offline: &'static str,
 }
 
@@ -57,7 +57,7 @@ pub const ZH: Strings = Strings {
     pick_asset_hint: "输入代码，比如 SOL；或者从下面选",
     pick_venue: "在哪看？",
     all_venues: "全部市场",
-    watch_soon: "盯盘正在做，很快上线",
+    hints_watch: "esc / q 停止盯盘",
     nl_soon: "自然语言助手还在路上（M4）。",
     nl_try: "你可能想要",
     cancelled: "已取消",
@@ -65,6 +65,7 @@ pub const ZH: Strings = Strings {
     help_title: "命令",
     help: [
         ("price <币>", "跨市场价格，比如 price SOL ETH、price ETH-PERP@hl"),
+        ("watch <币>", "实时盯盘，比如 watch SOL BTC"),
         ("config show", "查看设置"),
         ("config set <键> <值>", "修改设置，比如 config set network.proxy http://127.0.0.1:7890"),
         ("menu", "回到菜单"),
@@ -95,7 +96,7 @@ pub const EN: Strings = Strings {
     pick_asset_hint: "Type a symbol like SOL, or pick one below",
     pick_venue: "Where?",
     all_venues: "All venues",
-    watch_soon: "Watch is being built and lands soon",
+    hints_watch: "esc / q stop watching",
     nl_soon: "The natural-language assistant is on its way (M4).",
     nl_try: "You might want",
     cancelled: "Cancelled",
@@ -103,6 +104,7 @@ pub const EN: Strings = Strings {
     help_title: "Commands",
     help: [
         ("price <asset>", "Cross-venue prices, e.g. price SOL ETH, price ETH-PERP@hl"),
+        ("watch <asset>", "Live prices, e.g. watch SOL BTC"),
         ("config show", "Show settings"),
         (
             "config set <key> <value>",

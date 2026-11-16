@@ -1,8 +1,9 @@
 use onra_core::{Market, MarketKind, MarketQuery, Result, Ticker, VenueId};
 use reqwest::Client;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::http::{decimal_f64, transport_error, unexpected};
+use crate::http::{decimal_f64, status_error, transport_error, unexpected};
 
 const VENUE: VenueId = VenueId::Jupiter;
 const API: &str = "https://lite-api.jup.ag";
@@ -34,6 +35,31 @@ impl Jupiter {
         Self { http }
     }
 
+    /// USD price for a mint.
+    pub async fn quote(&self, mint: &str) -> Result<Decimal> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Price {
+            usd_price: f64,
+        }
+        let resp = self
+            .http
+            .get(format!("{API}/price/v3"))
+            .query(&[("ids", mint)])
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(status_error(VENUE, resp.status()));
+        }
+        let prices: std::collections::HashMap<String, Price> =
+            resp.json().await.map_err(|e| transport_error(VENUE, e))?;
+        prices
+            .get(mint)
+            .and_then(|p| decimal_f64(p.usd_price))
+            .ok_or_else(|| unexpected(VENUE, "no price for mint"))
+    }
+
     pub async fn ping(&self) -> Result<()> {
         const SOL: &str = "So11111111111111111111111111111111111111112";
         let resp = self
@@ -44,7 +70,7 @@ impl Jupiter {
             .await
             .map_err(|e| transport_error(VENUE, e))?;
         if !resp.status().is_success() {
-            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+            return Err(status_error(VENUE, resp.status()));
         }
         Ok(())
     }
@@ -58,7 +84,7 @@ impl Jupiter {
             .await
             .map_err(|e| transport_error(VENUE, e))?;
         if !resp.status().is_success() {
-            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+            return Err(status_error(VENUE, resp.status()));
         }
         let tokens: Vec<Token> = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
 

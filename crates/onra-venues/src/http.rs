@@ -55,12 +55,23 @@ pub(crate) fn transport_error(venue: VenueId, e: reqwest::Error) -> Error {
     }))
 }
 
+/// Map a non-success HTTP status. Throttling gets its own code so callers
+/// can back off instead of treating it as a failure.
+pub(crate) fn status_error(venue: VenueId, status: reqwest::StatusCode) -> Error {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Error::new(ErrorCode::RateLimited, format!("{venue} is rate limiting requests"));
+    }
+    unexpected(venue, format!("HTTP {status}"))
+}
+
 pub(crate) fn unexpected(venue: VenueId, detail: impl std::fmt::Display) -> Error {
     Error::new(ErrorCode::Venue, format!("{venue} returned an unexpected response: {detail}"))
 }
 
 pub(crate) fn decimal(venue: VenueId, s: &str) -> Result<Decimal> {
-    Decimal::from_str(s).map_err(|_| unexpected(venue, format!("bad number `{s}`")))
+    Decimal::from_str(s)
+        .map(|d| d.normalize())
+        .map_err(|_| unexpected(venue, format!("bad number `{s}`")))
 }
 
 /// f64 → Decimal via the shortest round-trip representation, so 71.33 stays

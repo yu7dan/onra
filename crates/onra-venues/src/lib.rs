@@ -6,7 +6,8 @@ mod http;
 mod hyperliquid;
 mod jupiter;
 
-use onra_core::{MarketQuery, Result, Ticker, VenueId};
+use onra_core::{Market, MarketQuery, Result, Ticker, VenueId};
+use rust_decimal::Decimal;
 
 pub use http::NetConfig;
 
@@ -24,6 +25,16 @@ impl Venues {
             hyperliquid: hyperliquid::Hyperliquid::new(client.clone()),
             jupiter: jupiter::Jupiter::new(client),
         })
+    }
+
+    /// Latest price of an already-resolved market. Much lighter than
+    /// [`Venues::ticker`]: meant for polling.
+    pub async fn quote(&self, market: &Market) -> Result<Decimal> {
+        match market.venue {
+            VenueId::Binance => self.binance.quote(&market.venue_symbol).await,
+            VenueId::Hyperliquid => self.hyperliquid.quote(&market.venue_symbol).await,
+            VenueId::Jupiter => self.jupiter.quote(&market.venue_symbol).await,
+        }
     }
 
     /// A cheap request proving the venue is reachable.

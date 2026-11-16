@@ -60,6 +60,26 @@ Examples:
         markets: Vec<String>,
     },
 
+    /// Live prices. Press q or Esc to stop.
+    #[command(after_help = "\
+In JSON mode each refresh is one line (NDJSON): a \"snapshot\" event with the
+full price report, then \"tick\" events. Agents should pass --count.
+
+Examples:
+  onra watch SOL ETH
+  onra watch BTC-PERP@hl --interval 0.5
+  onra watch SOL --json --count 5")]
+    Watch {
+        #[arg(required = true, value_name = "MARKET")]
+        markets: Vec<String>,
+        /// Seconds between refreshes.
+        #[arg(long, default_value_t = 1.5, value_name = "SECS")]
+        interval: f64,
+        /// Stop after this many refreshes.
+        #[arg(long, value_name = "N")]
+        count: Option<u64>,
+    },
+
     /// Read and write configuration.
     Config {
         #[command(subcommand)]

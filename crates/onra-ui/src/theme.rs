@@ -121,6 +121,19 @@ impl Theme {
         self.paint(text, Color { rgb, basic: rgb.nearest_basic() })
     }
 
+    /// `text` in `fg` on a `bg` background, e.g. a price flash. Basic
+    /// terminals get reverse video instead.
+    pub fn on(&self, text: &str, fg: Rgb, bg: Rgb) -> String {
+        match self.mode {
+            ColorMode::None => text.to_string(),
+            ColorMode::Basic => format!("[7m{text}[0m"),
+            ColorMode::TrueColor => format!(
+                "[38;2;{};{};{};48;2;{};{};{}m{text}[0m",
+                fg.0, fg.1, fg.2, bg.0, bg.1, bg.2
+            ),
+        }
+    }
+
     pub fn brand(&self, text: &str) -> String {
         self.paint(text, palette::AMBER)
     }

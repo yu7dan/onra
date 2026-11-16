@@ -16,6 +16,8 @@ pub enum ErrorCode {
     MarketNotFound,
     /// Connection failed or timed out. Usually retryable.
     Network,
+    /// The venue is throttling requests. Retry after a pause.
+    RateLimited,
     /// The venue answered, but with an error.
     Venue,
     /// The config file is unreadable or invalid.
@@ -31,13 +33,13 @@ impl ErrorCode {
         match self {
             ErrorCode::Usage | ErrorCode::UnknownVenue => 2,
             ErrorCode::MarketNotFound | ErrorCode::Venue => 5,
-            ErrorCode::Network => 6,
+            ErrorCode::Network | ErrorCode::RateLimited => 6,
             ErrorCode::Config | ErrorCode::Internal => 1,
         }
     }
 
     pub fn retryable(self) -> bool {
-        matches!(self, ErrorCode::Network)
+        matches!(self, ErrorCode::Network | ErrorCode::RateLimited)
     }
 }
 

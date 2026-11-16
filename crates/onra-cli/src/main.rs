@@ -5,6 +5,7 @@ mod i18n;
 mod output;
 mod price;
 mod shell;
+mod watch;
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -73,6 +74,17 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let theme = out.theme().copied();
             let outcome = block_on(commands::price_with_live_progress(&venues, &markets, theme))??;
             Ok(out.emit(outcome))
+        }
+        Command::Watch { markets, interval, count } => {
+            let venues = Venues::new(&config.net(cli.proxy))?;
+            let interval = Duration::from_secs_f64(interval.clamp(0.2, 3600.0));
+            match out.theme().copied() {
+                Some(theme) => {
+                    block_on(watch::run_terminal(&venues, &markets, theme, interval, count))??
+                }
+                None => block_on(watch::run_json(&venues, &markets, interval, count))??,
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }

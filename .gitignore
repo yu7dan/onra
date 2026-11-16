@@ -1,5 +1,5 @@
 /target
 **/*.rs.bk
 
-# Internal design notes are kept out of the public repo.
-/docs/DESIGN.md
+# Internal planning (design, PRD, progress) stays out of the public repo.
+/docs/

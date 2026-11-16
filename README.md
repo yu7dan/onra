@@ -168,4 +168,8 @@ $ ./target/release/onra price SOL
 
 ## License
 
-To be decided before the first release.
+[Business Source License 1.1](LICENSE). Free for personal and other
+non-commercial use, including trading your own assets and powering your own
+agents. Offering Onra or a derivative as a commercial product or service
+needs a commercial license. Each version converts to Apache 2.0 four years
+after release.

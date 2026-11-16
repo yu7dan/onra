@@ -24,6 +24,10 @@ pub struct Ticker {
     pub price: Decimal,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_24h_pct: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low_24h: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_24h: Option<Decimal>,
     /// Hourly closes over the last 24h, oldest first. Empty when the venue
     /// has no candle data.
     #[serde(skip_serializing_if = "Vec::is_empty")]

@@ -4,11 +4,11 @@ mod output;
 mod price;
 
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 use onra_core::{Error, ErrorCode, Result};
-use onra_ui::{Convention, banner};
+use onra_ui::{Convention, logo, motion};
 use onra_venues::Venues;
 use serde_json::json;
 
@@ -46,20 +46,29 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
     let Some(command) = cli.command else {
-        return Ok(out.success(&json!({ "name": "onra", "version": VERSION }), |theme| {
-            if cli.version {
-                return banner(theme, VERSION);
-            }
-            let help = Cli::command().render_help().to_string();
-            format!("{}\n{help}", banner(theme, VERSION))
-        }));
+        let Some(theme) = out.theme() else {
+            return Ok(
+                out.success(&json!({ "name": "onra", "version": VERSION }), |_| String::new())
+            );
+        };
+        println!();
+        motion::play(Duration::from_millis(1500), |t| logo(t, theme.mode, 2, VERSION));
+        if !cli.version {
+            println!("\n{}", Cli::command().render_help());
+        }
+        println!();
+        return Ok(ExitCode::SUCCESS);
     };
 
     match command {
         Command::Price { markets } => {
             let venues = Venues::new(&config.net(cli.proxy))?;
-            let report = block_on(price::fetch(&venues, &markets))??;
-            Ok(out.success(&report, |theme| price::render(&report, theme)))
+            let loader =
+                out.theme().filter(|_| motion::motion_enabled()).map(|t| price::Loader::new(*t));
+            let started = Instant::now();
+            let report = block_on(price::fetch(&venues, &markets, loader))??;
+            let elapsed = started.elapsed();
+            Ok(out.success_lines(&report, |theme| price::render(&report, theme, elapsed)))
         }
         Command::Config { action } => config_command(action, &mut config, out),
     }

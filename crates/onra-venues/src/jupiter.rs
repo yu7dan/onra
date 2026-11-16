@@ -85,6 +85,8 @@ impl Jupiter {
                 .and_then(|s| s.price_change)
                 .and_then(decimal_f64)
                 .map(|d| d.round_dp(4)),
+            low_24h: None,
+            high_24h: None,
             trend_24h: Vec::new(),
         }))
     }

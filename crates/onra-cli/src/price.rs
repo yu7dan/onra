@@ -1,10 +1,16 @@
-//! `onra price`: one table, every venue. This is the "single entry point"
-//! idea in its smallest form.
+//! `onra price`: every venue, one view. The cross-venue comparison (reference
+//! price, spread, cheapest and dearest venue) is the point, so it leads both
+//! the rendered view and the JSON.
 
-use futures::future::join_all;
+use std::cmp::Ordering;
+use std::time::{Duration, Instant};
+
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use onra_core::{Error, ErrorCode, MarketQuery, Result, Ticker, VenueId};
 use onra_proto::Warning;
-use onra_ui::{Align, Cell, Table, Theme, format, sparkline};
+use onra_ui::motion::Live;
+use onra_ui::{Align, Cell, Rgb, Table, Theme, format, palette, sparkline_styled};
 use onra_venues::Venues;
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -12,52 +18,110 @@ use serde_json::json;
 
 #[derive(Serialize)]
 pub struct Report {
-    pub tickers: Vec<Ticker>,
+    pub assets: Vec<Asset>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
-    /// Which input each ticker answers, for grouping rows on screen.
-    #[serde(skip)]
-    groups: Vec<usize>,
 }
 
-pub async fn fetch(venues: &Venues, inputs: &[String]) -> Result<Report> {
+/// One requested market across every venue that answered for it.
+#[derive(Serialize)]
+pub struct Asset {
+    pub query: String,
+    /// Median of the venue prices.
+    pub reference_price: Decimal,
+    /// (highest − lowest) / lowest, in percent. Needs two or more venues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread_pct: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lowest: Option<VenueId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highest: Option<VenueId>,
+    pub quotes: Vec<Quote>,
+}
+
+#[derive(Serialize)]
+pub struct Quote {
+    #[serde(flatten)]
+    pub ticker: Ticker,
+    pub latency_ms: u64,
+}
+
+pub async fn fetch(
+    venues: &Venues,
+    inputs: &[String],
+    mut loader: Option<Loader>,
+) -> Result<Report> {
     let queries = inputs.iter().map(|s| s.parse()).collect::<Result<Vec<MarketQuery>>>()?;
-
     let queries = &queries;
-    let lookups = queries.iter().enumerate().flat_map(|(qi, q)| {
-        VenueId::ALL.into_iter().filter(|&v| q.applies_to(v)).map(move |v| (qi, v))
-    });
-    // join_all preserves order: rows come out grouped by input, then by venue.
-    let results =
-        join_all(lookups.map(|(qi, venue)| async move {
-            (qi, venue, venues.ticker(venue, &queries[qi]).await)
-        }))
-        .await;
 
-    let mut report = Report { tickers: Vec::new(), warnings: Vec::new(), groups: Vec::new() };
-    let mut answered = vec![false; queries.len()];
-    let mut errored = vec![false; queries.len()];
-    for (qi, venue, result) in results {
-        match result {
-            Ok(Some(ticker)) => {
-                answered[qi] = true;
-                report.tickers.push(ticker);
-                report.groups.push(qi);
+    let mut pending: FuturesUnordered<_> = queries
+        .iter()
+        .enumerate()
+        .flat_map(|(qi, q)| {
+            VenueId::ALL.into_iter().filter(|&v| q.applies_to(v)).map(move |v| (qi, v))
+        })
+        .map(|(qi, venue)| async move {
+            let started = Instant::now();
+            let result = venues.ticker(venue, &queries[qi]).await;
+            (qi, venue, result, started.elapsed())
+        })
+        .collect();
+    if let Some(loader) = &mut loader {
+        for q in queries {
+            loader.expect(VenueId::ALL.into_iter().filter(|&v| q.applies_to(v)));
+        }
+    }
+
+    let mut results = Vec::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(60));
+    loop {
+        tokio::select! {
+            next = pending.next() => match next {
+                Some(result) => {
+                    if let Some(loader) = &mut loader {
+                        loader.record(result.1, result.2.as_ref().err(), result.3);
+                    }
+                    results.push(result);
+                }
+                None => break,
+            },
+            _ = tick.tick(), if loader.is_some() => {
+                if let Some(loader) = &mut loader {
+                    loader.draw();
+                }
             }
+        }
+    }
+    if let Some(loader) = loader {
+        loader.clear();
+    }
+    // Results arrive in completion order; present them in request order,
+    // then in the canonical venue order.
+    results.sort_by_key(|(qi, venue, ..)| (*qi, VenueId::ALL.iter().position(|v| v == venue)));
+
+    let mut quotes: Vec<Vec<Quote>> = (0..queries.len()).map(|_| Vec::new()).collect();
+    let mut errored = vec![false; queries.len()];
+    let mut warnings: Vec<Warning> = Vec::new();
+    for (qi, venue, result, elapsed) in results {
+        match result {
+            Ok(Some(ticker)) => quotes[qi].push(Quote {
+                ticker,
+                latency_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
+            }),
             Ok(None) => {}
             Err(error) => {
                 errored[qi] = true;
                 // One warning per venue: if it's down, it's down for every input.
-                if !report.warnings.iter().any(|w| w.venue == venue) {
-                    report.warnings.push(Warning { venue, error });
+                if !warnings.iter().any(|w| w.venue == venue) {
+                    warnings.push(Warning { venue, error });
                 }
             }
         }
     }
 
     // A market no venue lists is almost always a typo; say so loudly rather
-    // than returning a table with a silent hole in it.
-    if let Some(qi) = (0..queries.len()).find(|&i| !answered[i] && !errored[i]) {
+    // than returning a view with a silent hole in it.
+    if let Some(qi) = (0..queries.len()).find(|&i| quotes[i].is_empty() && !errored[i]) {
         let tried: Vec<_> = VenueId::ALL
             .into_iter()
             .filter(|&v| queries[qi].applies_to(v))
@@ -69,45 +133,114 @@ pub async fn fetch(venues: &Venues, inputs: &[String]) -> Result<Report> {
         )
         .with_hint(json!({ "tried": tried })));
     }
-    if report.tickers.is_empty() {
+    if quotes.iter().all(Vec::is_empty) {
         // Nothing succeeded; surface the first failure as the error.
-        return Err(report.warnings.swap_remove(0).error);
+        return Err(warnings.swap_remove(0).error);
     }
-    Ok(report)
+
+    let assets = inputs
+        .iter()
+        .zip(quotes)
+        .filter(|(_, q)| !q.is_empty())
+        .map(|(input, quotes)| summarize(input, quotes))
+        .collect();
+    Ok(Report { assets, warnings })
 }
 
-pub fn render(report: &Report, theme: &Theme) -> String {
-    let header = |s: &str| Cell::new(s, theme.dim(s));
-    let mut table = Table::new(vec![
-        (header("MARKET"), Align::Left),
-        (header("VENUE"), Align::Left),
-        (header("PRICE"), Align::Right),
-        (header("24H"), Align::Right),
-        (header("24H TREND"), Align::Left),
-    ]);
+fn summarize(query: &str, quotes: Vec<Quote>) -> Asset {
+    let mut prices: Vec<Decimal> = quotes.iter().map(|q| q.ticker.price).collect();
+    prices.sort();
+    let mid = prices.len() / 2;
+    let reference_price = if prices.len() % 2 == 0 {
+        (prices[mid - 1] + prices[mid]) / Decimal::TWO
+    } else {
+        prices[mid]
+    };
 
-    let mut i = 0;
-    while i < report.tickers.len() {
-        let group = report.groups[i];
-        let end = (i..report.tickers.len())
-            .find(|&j| report.groups[j] != group)
-            .unwrap_or(report.tickers.len());
+    let (mut spread_pct, mut lowest, mut highest) = (None, None, None);
+    if quotes.len() > 1 {
+        let low = quotes.iter().min_by_key(|q| q.ticker.price).expect("non-empty");
+        let high = quotes.iter().max_by_key(|q| q.ticker.price).expect("non-empty");
+        if !low.ticker.price.is_zero() {
+            spread_pct = Some(
+                ((high.ticker.price - low.ticker.price) / low.ticker.price * Decimal::ONE_HUNDRED)
+                    .round_dp(4),
+            );
+        }
+        lowest = Some(low.ticker.market.venue);
+        highest = Some(high.ticker.market.venue);
+    }
+    Asset { query: query.to_string(), reference_price, spread_pct, lowest, highest, quotes }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+
+/// Spreads at or above this are worth a second look, so they're highlighted.
+const NOTABLE_SPREAD_PCT: Decimal = Decimal::from_parts(5, 0, 0, false, 1);
+
+fn venue_color(venue: VenueId) -> Rgb {
+    match venue {
+        VenueId::Binance => Rgb(240, 185, 11),
+        VenueId::Hyperliquid => Rgb(80, 227, 194),
+        VenueId::Jupiter => Rgb(199, 242, 132),
+    }
+}
+
+fn direction(value: Decimal) -> Ordering {
+    value.round_dp(2).cmp(&Decimal::ZERO)
+}
+
+pub fn render(report: &Report, theme: &Theme, elapsed: Duration) -> Vec<String> {
+    let mut table = Table::new(vec![
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+        Align::Right,
+    ])
+    .indent(2);
+
+    for (i, asset) in report.assets.iter().enumerate() {
         if i > 0 {
             table.gap();
         }
         // One precision per asset so venues line up digit for digit.
-        let dp = format::price_dp(report.tickers[i].price);
-        for t in &report.tickers[i..end] {
-            table.row(row(t, dp, theme));
+        let dp = format::price_dp(asset.reference_price);
+        table.line(move |width| asset_header(asset, dp, theme, width));
+        for quote in &asset.quotes {
+            table.row(quote_row(quote, dp, theme));
         }
-        i = end;
+        if let Some(line) = spread_line(asset, theme) {
+            table.line(move |_| line.clone());
+        }
     }
 
-    let mut out = format!("\n{}", table.render());
+    let mut lines = vec![String::new()];
+    lines.extend(table.render());
+    lines.push(String::new());
+
+    let mut venues: Vec<VenueId> =
+        report.assets.iter().flat_map(|a| a.quotes.iter().map(|q| q.ticker.market.venue)).collect();
+    venues.sort_by_key(|v| VenueId::ALL.iter().position(|x| x == v));
+    venues.dedup();
+    let now = onra_proto::Meta::new(elapsed).ts;
+    let clock = now.get(11..19).unwrap_or_default();
+    lines.push(format!(
+        "  {}",
+        theme.faint(&format!(
+            "{} venue{} · {}ms · {clock} UTC",
+            venues.len(),
+            if venues.len() == 1 { "" } else { "s" },
+            elapsed.as_millis()
+        ))
+    ));
+
     if !report.warnings.is_empty() {
-        out.push('\n');
+        lines.push(String::new());
         for w in &report.warnings {
-            out.push_str(&format!("  {} {}\n", theme.warn("!"), theme.warn(&w.error.message)));
+            lines.push(format!("  {} {}", theme.warn("!"), theme.warn(&w.error.message)));
         }
         // Venues usually fail for the same reason; give each fix once.
         let mut suggestions: Vec<&str> = Vec::new();
@@ -117,41 +250,232 @@ pub fn render(report: &Report, theme: &Theme) -> String {
             }
         }
         for s in suggestions {
-            out.push_str(&format!("    {}\n", theme.dim(&format!("→ {s}"))));
+            lines.push(format!("    {}", theme.dim(&format!("→ {s}"))));
         }
     }
-    out.push('\n');
-    out
+    lines.push(String::new());
+    lines
 }
 
-fn row(t: &Ticker, dp: u32, theme: &Theme) -> Vec<Cell> {
+/// `SOL   71.2484  −2.35%                 24h  69.09 ──────●───── 72.83`
+fn asset_header(asset: &Asset, dp: u32, theme: &Theme, width: usize) -> String {
+    let name = asset.quotes[0].ticker.market.base.clone();
+    let price = format::price(asset.reference_price, dp);
+    // The change of the first venue that reports one stands for the asset.
+    let change = asset.quotes.iter().find_map(|q| q.ticker.change_24h_pct);
+
+    let mut left_plain = format!("{name}   {price}");
+    let mut left = format!("{}   {}", theme.strong(&name), theme.strong(&price));
+    if let Some(pct) = change {
+        let text = format::percent(pct);
+        left_plain.push_str(&format!("  {text}"));
+        left.push_str(&format!("  {}", theme.movement(&text, direction(pct))));
+    }
+
+    let Some((range_plain, range)) = range_bar(asset, dp, theme) else {
+        return left;
+    };
+    let used = display_width(&left_plain) + display_width(&range_plain);
+    let pad = width.saturating_sub(used).max(3);
+    format!("{left}{}{range}", " ".repeat(pad))
+}
+
+/// The 24h range with the reference price placed on it.
+fn range_bar(asset: &Asset, dp: u32, theme: &Theme) -> Option<(String, String)> {
+    const TRACK: usize = 14;
+    let (low, high) =
+        asset.quotes.iter().find_map(|q| Some((q.ticker.low_24h?, q.ticker.high_24h?)))?;
+    if high <= low {
+        return None;
+    }
+    let t = ((asset.reference_price - low) / (high - low)).clamp(Decimal::ZERO, Decimal::ONE);
+    let pos = (t * Decimal::from(TRACK - 1)).round().try_into().unwrap_or(0usize);
+
+    // Range labels are context, not quotes: two decimals are plenty above 1.
+    let dp = if asset.reference_price >= Decimal::ONE { dp.min(2) } else { dp };
+    let (low_s, high_s) = (format::price(low, dp), format::price(high, dp));
+    let plain = format!("24h  {low_s} {} {high_s}", "─".repeat(TRACK));
+    let styled = format!(
+        "{}  {} {}{}{} {}",
+        theme.faint("24h"),
+        theme.dim(&low_s),
+        theme.rgb(&"─".repeat(pos), palette::MUTED),
+        theme.brand("●"),
+        theme.faint(&"─".repeat(TRACK - 1 - pos)),
+        theme.dim(&high_s),
+    );
+    Some((plain, styled))
+}
+
+fn quote_row(quote: &Quote, dp: u32, theme: &Theme) -> Vec<Cell> {
+    let t = &quote.ticker;
+    let venue = t.market.venue.name();
+    let venue_cell = Cell::new(
+        format!("  ● {venue}"),
+        format!("  {} {}", theme.rgb("●", venue_color(t.market.venue)), theme.dim(venue)),
+    );
+
     let market = if t.market.verified {
-        Cell::plain(&t.market.symbol)
+        Cell::new(&t.market.symbol, theme.rgb(&t.market.symbol, palette::MUTED))
     } else {
-        let plain = format!("{} unverified", t.market.symbol);
-        Cell::new(plain, format!("{} {}", t.market.symbol, theme.warn("unverified")))
+        Cell::new(
+            format!("{} unverified", t.market.symbol),
+            format!("{} {}", theme.rgb(&t.market.symbol, palette::MUTED), theme.warn("unverified")),
+        )
     };
 
     let price = format::price(t.price, dp);
+    let (digits, zeros) = format::split_trailing_zeros(&price);
+    let price_cell = Cell::new(&price, format!("{}{}", theme.strong(digits), theme.faint(zeros)));
+
     let change = match t.change_24h_pct {
         Some(pct) => {
             let text = format::percent(pct);
-            Cell::new(&text, theme.movement(&text, pct.round_dp(2).cmp(&Decimal::ZERO)))
+            Cell::new(&text, theme.movement(&text, direction(pct)))
         }
-        None => Cell::new("—", theme.dim("—")),
+        None => Cell::new("—", theme.faint("—")),
     };
 
-    let spark = sparkline(&t.trend_24h);
+    // The trend takes the color of the 24h change, so every column of a row
+    // tells the same story.
     let trend = match (t.trend_24h.first(), t.trend_24h.last()) {
-        (Some(first), Some(last)) => Cell::new(&spark, theme.movement(&spark, last.cmp(first))),
-        _ => Cell::new("", ""),
+        (Some(first), Some(last)) => {
+            let dir = t.change_24h_pct.map_or_else(|| last.cmp(first), direction);
+            let color = theme.movement_color(dir).rgb;
+            let plain = onra_ui::sparkline(&t.trend_24h);
+            Cell::new(plain, sparkline_styled(&t.trend_24h, color, theme))
+        }
+        _ => Cell::empty(),
     };
 
-    vec![
-        market,
-        Cell::new(t.market.venue.name(), theme.dim(t.market.venue.name())),
-        Cell::new(&price, theme.bold(&price)),
-        change,
-        trend,
-    ]
+    let latency = format!("{}ms", quote.latency_ms);
+    vec![venue_cell, market, price_cell, change, trend, Cell::new(&latency, theme.faint(&latency))]
+}
+
+/// `spread 0.05%  ·  low hyperliquid  ·  high binance`
+fn spread_line(asset: &Asset, theme: &Theme) -> Option<String> {
+    let spread = asset.spread_pct?;
+    let value = format!("{}%", spread.round_dp(2));
+    let value = if spread >= NOTABLE_SPREAD_PCT { theme.warn(&value) } else { theme.dim(&value) };
+    let sep = theme.faint("  ·  ");
+    Some(format!(
+        "  {} {value}{sep}{} {}{sep}{} {}",
+        theme.faint("spread"),
+        theme.faint("low"),
+        theme.dim(asset.lowest?.name()),
+        theme.faint("high"),
+        theme.dim(asset.highest?.name()),
+    ))
+}
+
+/// Everything in a header is single-width (ASCII, box drawing, `−`, `●`).
+fn display_width(s: &str) -> usize {
+    s.chars().count()
+}
+
+// ---------------------------------------------------------------------------
+// Live progress while venues answer
+
+/// Per-venue progress shown while a fetch is in flight. Stays invisible for
+/// fast responses, so it never flashes.
+pub struct Loader {
+    theme: Theme,
+    started: Instant,
+    live: Option<Live>,
+    venues: Vec<(VenueId, VenueState)>,
+}
+
+enum VenueState {
+    Waiting { remaining: usize, slowest: Duration, failed: Option<String> },
+    Done { slowest: Duration, failed: Option<String> },
+}
+
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const APPEAR_AFTER: Duration = Duration::from_millis(90);
+
+impl Loader {
+    pub fn new(theme: Theme) -> Self {
+        Self { theme, started: Instant::now(), live: None, venues: Vec::new() }
+    }
+
+    fn expect(&mut self, venues: impl Iterator<Item = VenueId>) {
+        for venue in venues {
+            match self.venues.iter_mut().find(|(v, _)| *v == venue) {
+                Some((_, VenueState::Waiting { remaining, .. })) => *remaining += 1,
+                Some(_) => {}
+                None => self.venues.push((
+                    venue,
+                    VenueState::Waiting { remaining: 1, slowest: Duration::ZERO, failed: None },
+                )),
+            }
+        }
+        self.venues.sort_by_key(|(v, _)| VenueId::ALL.iter().position(|x| x == v));
+    }
+
+    fn record(&mut self, venue: VenueId, error: Option<&Error>, elapsed: Duration) {
+        let Some((_, state)) = self.venues.iter_mut().find(|(v, _)| *v == venue) else {
+            return;
+        };
+        if let VenueState::Waiting { remaining, slowest, failed } = state {
+            *remaining -= 1;
+            *slowest = (*slowest).max(elapsed);
+            if let Some(e) = error {
+                failed.get_or_insert_with(|| e.message.clone());
+            }
+            if *remaining == 0 {
+                *state = VenueState::Done { slowest: *slowest, failed: failed.take() };
+            }
+        }
+        self.draw();
+    }
+
+    fn draw(&mut self) {
+        let elapsed = self.started.elapsed();
+        if elapsed < APPEAR_AFTER {
+            return;
+        }
+        let theme = &self.theme;
+        let frame = (elapsed.as_millis() / 80) as usize;
+        let spin = SPINNER[frame % SPINNER.len()].to_string();
+        let done = self.venues.iter().filter(|(_, s)| matches!(s, VenueState::Done { .. })).count();
+
+        let mut lines = vec![
+            String::new(),
+            format!(
+                "  {} {}  {}",
+                theme.brand(&spin),
+                theme.shimmer("reaching markets", elapsed.as_secs_f32() / 1.4),
+                theme.faint(&format!("{done}/{}", self.venues.len())),
+            ),
+        ];
+        let name_width = self.venues.iter().map(|(v, _)| v.name().len()).max().unwrap_or(0);
+        for (venue, state) in &self.venues {
+            let name = format!("{:<name_width$}", venue.name());
+            let status = match state {
+                VenueState::Waiting { .. } => theme.faint(&spin),
+                VenueState::Done { slowest, failed: None } => {
+                    format!(
+                        "{} {}",
+                        theme.brand("✓"),
+                        theme.faint(&format!("{}ms", slowest.as_millis()))
+                    )
+                }
+                VenueState::Done { failed: Some(msg), .. } => {
+                    format!("{} {}", theme.warn("✗"), theme.faint(msg))
+                }
+            };
+            lines.push(format!(
+                "    {} {}   {status}",
+                theme.rgb("●", venue_color(*venue)),
+                theme.dim(&name)
+            ));
+        }
+        self.live.get_or_insert_with(Live::new).draw(&lines);
+    }
+
+    fn clear(self) {
+        if let Some(live) = self.live {
+            live.clear();
+        }
+    }
 }

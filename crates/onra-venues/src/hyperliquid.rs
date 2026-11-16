@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use onra_core::{Market, MarketKind, MarketQuery, Result, Ticker, VenueId};
 use reqwest::Client;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::OnceCell;
@@ -49,6 +50,16 @@ struct AssetCtx {
 #[derive(Deserialize)]
 struct Candle {
     c: String,
+    h: String,
+    l: String,
+}
+
+/// The last 24 hourly candles, reduced to what a ticker needs.
+#[derive(Default)]
+struct Day {
+    closes: Vec<Decimal>,
+    low: Option<Decimal>,
+    high: Option<Decimal>,
 }
 
 impl Hyperliquid {
@@ -96,7 +107,7 @@ impl Hyperliquid {
         let prev = decimal(VENUE, &perp.ctx.prev_day_px)?;
         // The sparkline is decoration: a failed candle fetch must not hide
         // the price.
-        let trend = self.hourly_closes(&perp.coin).await.unwrap_or_default();
+        let day = self.day(&perp.coin).await.unwrap_or_default();
 
         Ok(Some(Ticker {
             market: Market {
@@ -109,11 +120,13 @@ impl Hyperliquid {
             },
             price,
             change_24h_pct: pct_change(prev, price),
-            trend_24h: trend,
+            low_24h: day.low,
+            high_24h: day.high,
+            trend_24h: day.closes,
         }))
     }
 
-    async fn hourly_closes(&self, coin: &str) -> Result<Vec<rust_decimal::Decimal>> {
+    async fn day(&self, coin: &str) -> Result<Day> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -132,6 +145,13 @@ impl Hyperliquid {
         // The range can include the current, unfinished hour; keep the last
         // 24 so every venue draws the same window.
         let skip = candles.len().saturating_sub(24);
-        candles[skip..].iter().map(|c| decimal(VENUE, &c.c)).collect()
+        let mut day = Day::default();
+        for candle in &candles[skip..] {
+            day.closes.push(decimal(VENUE, &candle.c)?);
+            let (h, l) = (decimal(VENUE, &candle.h)?, decimal(VENUE, &candle.l)?);
+            day.high = Some(day.high.map_or(h, |x| x.max(h)));
+            day.low = Some(day.low.map_or(l, |x| x.min(l)));
+        }
+        Ok(day)
     }
 }

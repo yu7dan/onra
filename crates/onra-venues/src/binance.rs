@@ -20,6 +20,8 @@ pub struct Binance {
 struct Ticker24h {
     last_price: String,
     price_change_percent: String,
+    high_price: String,
+    low_price: String,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +79,8 @@ impl Binance {
             },
             price: decimal(VENUE, &t.last_price)?,
             change_24h_pct: Some(decimal(VENUE, &t.price_change_percent)?),
+            low_24h: Some(decimal(VENUE, &t.low_price)?),
+            high_24h: Some(decimal(VENUE, &t.high_price)?),
             trend_24h: trend,
         }))
     }

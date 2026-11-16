@@ -1,9 +1,5 @@
-```
-        ▁▃▅▆▆▅▃▁
-     ▗▟██████████▙▖        o n r a
-    ▟██████████████▙       ─────────────────────
- ━━━━━━━━━━━━━━━━━━━━━━    markets never sleep
-```
+<p align="center"><img src="assets/logo.png" alt="onra" width="360"></p>
+<p align="center"><code>M A R K E T S &nbsp; N E V E R &nbsp; S L E E P</code></p>
 
 **Onra is the agent-native trading terminal for on-chain markets.** One
 command line, used by humans and AI agents alike, that reaches every market:
@@ -31,15 +27,25 @@ entry point that agents and people use to reach markets.
 ```console
 $ onra price SOL ETH
 
-  MARKET     VENUE             PRICE      24H   24H TREND
-  SOL/USDT   binance         71.2800   -2.41%   ▇▇▅▄▃▄▃▁▆▆▅▅▅▄▆▆▇▇██▆▆▆▆
-  SOL-PERP   hyperliquid     71.2425   -2.32%   ▇▇▅▄▃▄▃▁▆▆▅▅▅▄▆▆▇▇██▆▆▆▆
-  SOL        jupiter         71.2484   -2.35%
+  SOL   71.2289  +3.77%                             24h  67.41 ────────●───── 73.28
+    ● binance       SOL/USDT    71.2500   +3.77%   ▄▄▃▃▂▁▄▅▆▇█▇▄▄▅▅▄▅▆▆▇█▆▄   219ms
+    ● hyperliquid   SOL-PERP    71.2035   +3.81%   ▄▄▃▃▂▁▄▅▆▇█▇▄▄▄▅▄▅▆▆▇█▆▄   681ms
+    ● jupiter       SOL         71.2289   +3.77%                              166ms
+    spread 0.07%  ·  low hyperliquid  ·  high binance
 
-  ETH/USDT   binance        1,811.70   -1.79%   ██▅▄▂▄▂▁▇▇▆▆▅▄▆▇█▇██▆▆▇▆
-  ETH-PERP   hyperliquid    1,810.85   -1.63%   █▇▇▄▄▂▃▂▁▆▆▆▅▅▄▆▇▇▇█▇▆▆▆▆
-  ETH        jupiter        1,812.76   -1.43%
+  ETH   1,809.99  +4.68%                      24h  1,711.08 ──────────●─── 1,845.18
+    ● binance       ETH/USDT   1,809.99   +4.68%   ▅▆▅▃▂▁▅▆▇▆█▇▄▅▅▅▅▆▇▆▇█▅▅   217ms
+    ● hyperliquid   ETH-PERP   1,808.75   +4.85%   ▅▆▅▃▂▁▅▆▇▆█▇▄▅▅▅▅▇▇▆▇█▅▅   423ms
+    ● jupiter       ETH        1,816.01   +5.35%                              225ms
+    spread 0.40%  ·  low hyperliquid  ·  high jupiter
+
+  3 venues · 683ms · 01:33:08 UTC
 ```
+
+On a terminal the view is alive: venues report in as they answer, rows unfold,
+prices carry their own up/down colors. Each asset shows a reference price
+(the median across venues), its 24h range, and the spread between the
+cheapest and the dearest venue.
 
 The same command, piped or called by an agent, emits JSON:
 
@@ -48,18 +54,30 @@ $ onra price SOL@hl | jq .
 {
   "ok": true,
   "data": {
-    "tickers": [
+    "assets": [
       {
-        "market": { "venue": "hyperliquid", "symbol": "SOL-PERP", "kind": "perp", ... },
-        "price": "71.2425",
-        "change_24h_pct": "-2.3206",
-        "trend_24h": ["72.203", "72.182", ...]
+        "query": "SOL@hl",
+        "reference_price": "71.2175",
+        "quotes": [
+          {
+            "market": { "venue": "hyperliquid", "symbol": "SOL-PERP", "kind": "perp", ... },
+            "price": "71.2175",
+            "change_24h_pct": "3.8262",
+            "low_24h": "67.504",
+            "high_24h": "73.24",
+            "trend_24h": ["71.313", "71.327", ...],
+            "latency_ms": 632
+          }
+        ]
       }
     ]
   },
-  "meta": { "v": 1, "ts": "2026-11-15T17:34:51Z", "latency_ms": 296 }
+  "meta": { "v": 1, "ts": "2026-11-16T01:33:08Z", "latency_ms": 635 }
 }
 ```
+
+With several venues, each asset also carries `spread_pct`, `lowest` and
+`highest`: the cross-venue comparison, precomputed for agents.
 
 ## Markets
 

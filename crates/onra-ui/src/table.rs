@@ -23,28 +23,51 @@ impl Cell {
         let text = text.into();
         Self { styled: text.clone(), plain: text }
     }
+
+    pub fn empty() -> Self {
+        Self::plain("")
+    }
 }
 
-enum Row {
+enum Row<'a> {
     Cells(Vec<Cell>),
     Gap,
+    /// A full-width line rendered from the table's final width, for headers
+    /// and footers that align with the columns.
+    Line(Box<dyn Fn(usize) -> String + 'a>),
 }
 
-pub struct Table {
-    columns: Vec<(Cell, Align)>,
-    rows: Vec<Row>,
+/// Column-aligned rows with optional full-width lines in between.
+pub struct Table<'a> {
+    aligns: Vec<Align>,
+    header: Option<Vec<Cell>>,
+    rows: Vec<Row<'a>>,
+    indent: usize,
+    gap: usize,
 }
 
-const INDENT: &str = "  ";
-const COLUMN_GAP: &str = "   ";
+impl<'a> Table<'a> {
+    pub fn new(aligns: Vec<Align>) -> Self {
+        Self { aligns, header: None, rows: Vec::new(), indent: 2, gap: 3 }
+    }
 
-impl Table {
-    pub fn new(columns: Vec<(Cell, Align)>) -> Self {
-        Self { columns, rows: Vec::new() }
+    pub fn header(mut self, cells: Vec<Cell>) -> Self {
+        self.header = Some(cells);
+        self
+    }
+
+    pub fn indent(mut self, indent: usize) -> Self {
+        self.indent = indent;
+        self
+    }
+
+    pub fn column_gap(mut self, gap: usize) -> Self {
+        self.gap = gap;
+        self
     }
 
     pub fn row(&mut self, cells: Vec<Cell>) {
-        debug_assert_eq!(cells.len(), self.columns.len());
+        debug_assert_eq!(cells.len(), self.aligns.len());
         self.rows.push(Row::Cells(cells));
     }
 
@@ -53,24 +76,34 @@ impl Table {
         self.rows.push(Row::Gap);
     }
 
-    pub fn render(&self) -> String {
-        let mut widths: Vec<usize> = self.columns.iter().map(|(c, _)| c.plain.width()).collect();
-        for row in &self.rows {
-            if let Row::Cells(cells) = row {
-                for (w, cell) in widths.iter_mut().zip(cells) {
-                    *w = (*w).max(cell.plain.width());
-                }
+    /// A line built from the table's content width (excluding the indent).
+    pub fn line(&mut self, render: impl Fn(usize) -> String + 'a) {
+        self.rows.push(Row::Line(Box::new(render)));
+    }
+
+    pub fn render(&self) -> Vec<String> {
+        let mut widths = vec![0; self.aligns.len()];
+        let cell_rows = self.header.iter().chain(self.rows.iter().filter_map(|r| match r {
+            Row::Cells(cells) => Some(cells),
+            _ => None,
+        }));
+        for cells in cell_rows {
+            for (w, cell) in widths.iter_mut().zip(cells) {
+                *w = (*w).max(cell.plain.width());
             }
         }
+        let total = widths.iter().sum::<usize>() + self.gap * widths.len().saturating_sub(1);
+        let indent = " ".repeat(self.indent);
+        let gap = " ".repeat(self.gap);
 
-        let line = |cells: &mut dyn Iterator<Item = &Cell>| {
-            let mut out = String::from(INDENT);
-            for (i, cell) in cells.enumerate() {
+        let line = |cells: &[Cell]| {
+            let mut out = indent.clone();
+            for (i, cell) in cells.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(COLUMN_GAP);
+                    out.push_str(&gap);
                 }
                 let pad = " ".repeat(widths[i] - cell.plain.width());
-                match self.columns[i].1 {
+                match self.aligns[i] {
                     Align::Left => {
                         out.push_str(&cell.styled);
                         out.push_str(&pad);
@@ -84,13 +117,16 @@ impl Table {
             out.trim_end().to_string()
         };
 
-        let mut out = line(&mut self.columns.iter().map(|(c, _)| c));
-        out.push('\n');
+        let mut out = Vec::new();
+        if let Some(header) = &self.header {
+            out.push(line(header));
+        }
         for row in &self.rows {
-            if let Row::Cells(cells) = row {
-                out.push_str(&line(&mut cells.iter()));
-            }
-            out.push('\n');
+            out.push(match row {
+                Row::Cells(cells) => line(cells),
+                Row::Gap => String::new(),
+                Row::Line(render) => format!("{indent}{}", render(total)),
+            });
         }
         out
     }
@@ -102,14 +138,21 @@ mod tests {
 
     #[test]
     fn aligns_columns() {
-        let mut t =
-            Table::new(vec![(Cell::plain("A"), Align::Left), (Cell::plain("PRICE"), Align::Right)]);
+        let mut t = Table::new(vec![Align::Left, Align::Right])
+            .header(vec![Cell::plain("A"), Cell::plain("PRICE")]);
         t.row(vec![Cell::plain("SOL"), Cell::plain("71.39")]);
         t.gap();
         t.row(vec![Cell::new("BTC", "\x1b[1mBTC\x1b[0m"), Cell::plain("95,000.00")]);
+        t.line(|w| "-".repeat(w));
         assert_eq!(
             t.render(),
-            "  A         PRICE\n  SOL       71.39\n\n  \x1b[1mBTC\x1b[0m   95,000.00\n"
+            vec![
+                "  A         PRICE",
+                "  SOL       71.39",
+                "",
+                "  \x1b[1mBTC\x1b[0m   95,000.00",
+                "  ---------------",
+            ]
         );
     }
 }

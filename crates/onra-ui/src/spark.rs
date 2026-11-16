@@ -1,6 +1,9 @@
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
+use crate::Theme;
+use crate::theme::Rgb;
+
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// Min–max scaled sparkline, one bar per value.
@@ -18,6 +21,18 @@ pub fn sparkline(values: &[Decimal]) -> String {
             let t = (*v - *min).to_f64().unwrap_or(0.0) / range;
             BARS[(t * (BARS.len() - 1) as f64).round() as usize]
         })
+        .collect()
+}
+
+/// The sparkline in `color`, fading from faint (oldest) to full (now), so
+/// the eye lands on the present.
+pub fn sparkline_styled(values: &[Decimal], color: Rgb, theme: &Theme) -> String {
+    let plain = sparkline(values);
+    let n = plain.chars().count().max(2) - 1;
+    plain
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| theme.rgb(&ch.to_string(), color.fade(0.3 + 0.7 * i as f32 / n as f32)))
         .collect()
 }
 

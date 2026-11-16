@@ -30,6 +30,11 @@ impl Output {
         Self { theme, started }
     }
 
+    /// The rendering theme, or `None` in machine (JSON) mode.
+    pub fn theme(&self) -> Option<&Theme> {
+        self.theme.as_ref()
+    }
+
     pub fn success<T: Serialize>(
         &self,
         data: &T,
@@ -37,6 +42,19 @@ impl Output {
     ) -> ExitCode {
         match &self.theme {
             Some(theme) => print(&render(theme)),
+            None => print_json(&Envelope::ok(data, Meta::new(self.started.elapsed()))),
+        }
+        ExitCode::SUCCESS
+    }
+
+    /// Like [`Output::success`], but the rendered lines unfold one by one.
+    pub fn success_lines<T: Serialize>(
+        &self,
+        data: &T,
+        render: impl FnOnce(&Theme) -> Vec<String>,
+    ) -> ExitCode {
+        match &self.theme {
+            Some(theme) => onra_ui::motion::reveal(&render(theme)),
             None => print_json(&Envelope::ok(data, Meta::new(self.started.elapsed()))),
         }
         ExitCode::SUCCESS

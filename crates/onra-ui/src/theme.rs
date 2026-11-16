@@ -18,29 +18,70 @@ pub enum Convention {
     West,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Rgb(pub u8, pub u8, pub u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
-    pub(crate) fn lerp(self, to: Rgb, t: f32) -> Rgb {
+    pub fn lerp(self, to: Rgb, t: f32) -> Rgb {
+        let t = t.clamp(0.0, 1.0);
         let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
         Rgb(mix(self.0, to.0), mix(self.1, to.1), mix(self.2, to.2))
+    }
+
+    /// Fade toward the terminal background. `alpha` 0 is invisible, 1 is
+    /// full color. Assumes a dark background, which nearly every terminal
+    /// theme for trading uses.
+    pub fn fade(self, alpha: f32) -> Rgb {
+        palette::BACKGROUND.lerp(self, alpha)
+    }
+
+    /// The closest of the 16 standard ANSI foreground codes.
+    pub fn nearest_basic(self) -> u8 {
+        const BASIC: [(u8, Rgb); 12] = [
+            (30, Rgb(0, 0, 0)),
+            (31, Rgb(205, 49, 49)),
+            (32, Rgb(13, 188, 121)),
+            (33, Rgb(229, 160, 16)),
+            (37, Rgb(204, 204, 204)),
+            (90, Rgb(102, 102, 102)),
+            (91, Rgb(241, 76, 76)),
+            (92, Rgb(35, 209, 139)),
+            (93, Rgb(245, 222, 80)),
+            (95, Rgb(214, 112, 214)),
+            (96, Rgb(41, 184, 219)),
+            (97, Rgb(242, 242, 242)),
+        ];
+        let dist = |c: Rgb| {
+            let d = |a: u8, b: u8| (a as i32 - b as i32).pow(2);
+            d(self.0, c.0) + d(self.1, c.1) + d(self.2, c.2)
+        };
+        BASIC.iter().min_by_key(|(_, c)| dist(*c)).map(|(code, _)| *code).unwrap_or(37)
     }
 }
 
 /// Each color pairs a truecolor value with its closest basic ANSI code.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Color {
-    rgb: Rgb,
-    basic: u8,
+pub struct Color {
+    pub rgb: Rgb,
+    pub basic: u8,
 }
 
-pub(crate) mod palette {
+pub mod palette {
     use super::{Color, Rgb};
 
+    pub const BACKGROUND: Rgb = Rgb(13, 13, 16);
+    /// The one accent color.
     pub const AMBER: Color = Color { rgb: Rgb(245, 158, 11), basic: 33 };
     pub const SUN_TOP: Rgb = Rgb(253, 224, 71);
-    pub const SUN_BOTTOM: Rgb = Rgb(234, 88, 12);
+    /// The sun's hot core and its cooler rim.
+    pub const SUN_CORE: Rgb = Rgb(255, 238, 170);
+    pub const SUN_RIM: Rgb = Rgb(244, 114, 22);
+    /// Warm off-white for primary text; pure white reads harsh on dark.
+    pub const PAPER: Rgb = Rgb(246, 240, 228);
+    pub const HORIZON: Rgb = Rgb(120, 110, 100);
+    /// Secondary text, then tertiary text and rules.
+    pub const MUTED: Rgb = Rgb(110, 110, 118);
+    pub const FAINT: Rgb = Rgb(72, 72, 80);
     pub const RED: Color = Color { rgb: Rgb(239, 68, 68), basic: 31 };
     pub const GREEN: Color = Color { rgb: Rgb(34, 197, 94), basic: 32 };
     pub const GRAY: Color = Color { rgb: Rgb(115, 115, 115), basic: 90 };
@@ -64,27 +105,40 @@ impl Theme {
         Self { mode: detect_mode(), convention }
     }
 
-    fn paint(&self, text: &str, color: Color) -> String {
+    pub fn paint(&self, text: &str, color: Color) -> String {
         match self.mode {
             ColorMode::None => text.to_string(),
-            ColorMode::Basic => format!("\x1b[{}m{text}\x1b[0m", color.basic),
+            ColorMode::Basic => format!("[{}m{text}[0m", color.basic),
             ColorMode::TrueColor => {
                 let Rgb(r, g, b) = color.rgb;
-                format!("\x1b[38;2;{r};{g};{b}m{text}\x1b[0m")
+                format!("[38;2;{r};{g};{b}m{text}[0m")
             }
         }
     }
 
-    pub(crate) fn rgb(&self, text: &str, rgb: Rgb, basic: u8) -> String {
-        self.paint(text, Color { rgb, basic })
+    /// Paint with an arbitrary color; basic terminals get the nearest ANSI one.
+    pub fn rgb(&self, text: &str, rgb: Rgb) -> String {
+        self.paint(text, Color { rgb, basic: rgb.nearest_basic() })
     }
 
     pub fn brand(&self, text: &str) -> String {
         self.paint(text, palette::AMBER)
     }
 
+    /// Primary text: warm off-white, bold.
+    pub fn strong(&self, text: &str) -> String {
+        match self.mode {
+            ColorMode::None => text.to_string(),
+            _ => self.bold(&self.rgb(text, palette::PAPER)),
+        }
+    }
+
     pub fn dim(&self, text: &str) -> String {
         self.paint(text, palette::GRAY)
+    }
+
+    pub fn faint(&self, text: &str) -> String {
+        self.rgb(text, palette::FAINT)
     }
 
     pub fn warn(&self, text: &str) -> String {
@@ -94,21 +148,44 @@ impl Theme {
     pub fn bold(&self, text: &str) -> String {
         match self.mode {
             ColorMode::None => text.to_string(),
-            _ => format!("\x1b[1m{text}\x1b[0m"),
+            _ => format!("[1m{text}[0m"),
         }
     }
 
-    /// Color by price direction, honoring the up/down convention.
-    pub fn movement(&self, text: &str, direction: Ordering) -> String {
+    /// The color for a price direction, honoring the up/down convention.
+    pub fn movement_color(&self, direction: Ordering) -> Color {
         let (up, down) = match self.convention {
             Convention::East => (palette::RED, palette::GREEN),
             Convention::West => (palette::GREEN, palette::RED),
         };
         match direction {
-            Ordering::Greater => self.paint(text, up),
-            Ordering::Less => self.paint(text, down),
-            Ordering::Equal => self.dim(text),
+            Ordering::Greater => up,
+            Ordering::Less => down,
+            Ordering::Equal => palette::GRAY,
         }
+    }
+
+    pub fn movement(&self, text: &str, direction: Ordering) -> String {
+        self.paint(text, self.movement_color(direction))
+    }
+
+    /// A band of light sweeping across `text`; `t` in `[0, 1)` is one pass.
+    /// Used for "working" labels. Without truecolor it is plain brand color.
+    pub fn shimmer(&self, text: &str, t: f32) -> String {
+        if self.mode != ColorMode::TrueColor {
+            return self.brand(text);
+        }
+        let n = text.chars().count() as f32;
+        // The band travels past both ends so it enters and leaves cleanly.
+        let center = -4.0 + t.fract() * (n + 8.0);
+        let mut out = String::new();
+        for (i, ch) in text.chars().enumerate() {
+            let glow = (1.0 - (i as f32 - center).abs() / 4.0).max(0.0);
+            let Rgb(r, g, b) = palette::AMBER.rgb.lerp(palette::SUN_CORE, glow);
+            out.push_str(&format!("[38;2;{r};{g};{b}m{ch}"));
+        }
+        out.push_str("[0m");
+        out
     }
 }
 

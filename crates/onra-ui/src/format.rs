@@ -30,11 +30,25 @@ pub fn price(value: Decimal, dp: u32) -> String {
     group_thousands(&s)
 }
 
-/// `+2.03%` / `-0.41%`. The explicit sign keeps the column aligned.
+/// `+2.03%` / `−0.41%`, with a true minus sign (U+2212) so it matches the
+/// plus in width and weight. The explicit sign keeps the column aligned.
 pub fn percent(value: Decimal) -> String {
     let rounded = value.round_dp(2);
-    let sign = if rounded.is_sign_negative() && !rounded.is_zero() { "" } else { "+" };
-    format!("{sign}{rounded:.2}%")
+    let sign = if rounded.is_sign_negative() && !rounded.is_zero() { "−" } else { "+" };
+    format!("{sign}{:.2}%", rounded.abs())
+}
+
+/// Split a formatted number into its significant part and the trailing
+/// zeros padding it to a fixed precision: `71.2800` → (`71.28`, `00`).
+/// Renderers dim the zeros so the digits that carry information stand out.
+pub fn split_trailing_zeros(formatted: &str) -> (&str, &str) {
+    if !formatted.contains('.') {
+        return (formatted, "");
+    }
+    let trimmed = formatted.trim_end_matches('0');
+    // Keep at least one decimal digit: `71.0000` → (`71.0`, `000`).
+    let keep = if trimmed.ends_with('.') { trimmed.len() + 1 } else { trimmed.len() };
+    formatted.split_at(keep.min(formatted.len()))
 }
 
 fn group_thousands(s: &str) -> String {
@@ -82,7 +96,15 @@ mod tests {
     #[test]
     fn formats_percent() {
         assert_eq!(percent(d("2.031")), "+2.03%");
-        assert_eq!(percent(d("-2.031")), "-2.03%");
+        assert_eq!(percent(d("-2.031")), "−2.03%");
         assert_eq!(percent(d("-0.001")), "+0.00%");
+    }
+
+    #[test]
+    fn splits_trailing_zeros() {
+        assert_eq!(split_trailing_zeros("71.2800"), ("71.28", "00"));
+        assert_eq!(split_trailing_zeros("71.0000"), ("71.0", "000"));
+        assert_eq!(split_trailing_zeros("95,123.45"), ("95,123.45", ""));
+        assert_eq!(split_trailing_zeros("100"), ("100", ""));
     }
 }

@@ -364,9 +364,9 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
         .iter()
         .filter(|c| !c.passed || !matches!(c.rule.as_str(), "venue" | "verified" | "halt"));
     for (i, c) in shown.enumerate() {
-        let name = pad(rule_label(&c.rule), 12);
+        let name = pad(i18n::rule_name(&c.rule), 12);
         let mark_plain = if c.passed { "✓" } else { "✗" };
-        let mark = if c.passed { theme.brand("✓") } else { theme.warn("✗") };
+        let mark = if c.passed { theme.brand("✓") } else { theme.error("✗") };
         let lbl = if i == 0 { s.lbl_policy } else { "" };
         let detail = match c.rule.as_str() {
             "venue" | "verified" | "halt" => format!("{name}{}", c.value),
@@ -377,7 +377,7 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
             format!(
                 "  {}{mark} {}",
                 theme.dim(&label(lbl)),
-                if c.passed { theme.faint(&detail) } else { theme.warn(&detail) }
+                if c.passed { theme.faint(&detail) } else { theme.error(&detail) }
             ),
         ));
     }
@@ -415,21 +415,6 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
         theme.faint("─╯")
     ));
     out
-}
-
-fn rule_label(rule: &str) -> &'static str {
-    let s = i18n::s();
-    match rule {
-        "max_trade_usd" => s.rule_trade,
-        "max_daily_usd" => s.rule_daily,
-        "max_slippage_pct" => s.rule_slippage,
-        "max_leverage" => s.rule_leverage,
-        "verified" => s.rule_verified,
-        "venue" => s.rule_venue,
-        "halt" => s.rule_halt,
-        "max_trades_per_minute" => s.rule_rate,
-        _ => "",
-    }
 }
 
 fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {

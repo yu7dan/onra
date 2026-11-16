@@ -158,6 +158,12 @@ impl Theme {
         self.paint(text, palette::WARN)
     }
 
+    /// Errors and refusals. Always red: unlike price moves, failure does not
+    /// change color with the market convention.
+    pub fn error(&self, text: &str) -> String {
+        self.paint(text, palette::RED)
+    }
+
     pub fn bold(&self, text: &str) -> String {
         match self.mode {
             ColorMode::None => text.to_string(),

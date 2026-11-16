@@ -113,7 +113,25 @@ pub fn error_text(error: &Error) -> String {
         }
         ErrorCode::PlanExpired => Some(s.err_plan_expired.to_string()),
         ErrorCode::Policy if hint("cause").as_deref() == Some("denied") => {
-            let what = error.message.trim_start_matches("blocked by policy: ").to_string();
+            // Name the limits the way the plan card does.
+            let checks =
+                error.hint.as_ref().and_then(|h| h.get("checks")).and_then(|c| c.as_array());
+            let what = match checks {
+                Some(checks) => checks
+                    .iter()
+                    .map(|c| {
+                        let field = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+                        format!(
+                            "{} {} > {}",
+                            rule_name(field("rule")),
+                            field("value"),
+                            field("limit")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                None => error.message.trim_start_matches("blocked by policy: ").to_string(),
+            };
             Some(fill(s.err_denied, &[("what", &what)]))
         }
         ErrorCode::Venue if hint("cause").as_deref() == Some("min_order") => Some(fill(
@@ -159,6 +177,22 @@ pub fn error_text(error: &Error) -> String {
         _ => None,
     };
     text.unwrap_or_else(|| error.message.clone())
+}
+
+/// A policy rule as people read it.
+pub fn rule_name(rule: &str) -> &'static str {
+    let s = s();
+    match rule {
+        "max_trade_usd" => s.rule_trade,
+        "max_daily_usd" => s.rule_daily,
+        "max_slippage_pct" => s.rule_slippage,
+        "max_leverage" => s.rule_leverage,
+        "verified" => s.rule_verified,
+        "venue" => s.rule_venue,
+        "halt" => s.rule_halt,
+        "max_trades_per_minute" => s.rule_rate,
+        _ => "",
+    }
 }
 
 pub struct Strings {

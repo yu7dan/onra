@@ -59,11 +59,8 @@ impl Output {
     pub fn failure(&self, error: &Error) -> ExitCode {
         match &self.theme {
             Some(theme) => {
-                let mut text = format!(
-                    "\n  {} {}\n",
-                    theme.movement("✗", std::cmp::Ordering::Less),
-                    crate::i18n::error_text(error)
-                );
+                let mut text =
+                    format!("\n  {} {}\n", theme.error("✗"), crate::i18n::error_text(error));
                 if let Some(suggest) = error.suggestion() {
                     text.push_str(&format!("    {}\n", theme.dim(&format!("→ {suggest}"))));
                 }

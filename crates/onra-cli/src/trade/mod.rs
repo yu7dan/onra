@@ -144,6 +144,7 @@ pub async fn trade(kind: Kind, args: TradeArgs, theme: Option<Theme>) -> Result<
                     println!("{line}");
                 }
                 if !args.yes && !confirm()? {
+                    let _ = ipc::call(&ipc::Request::Discard { plan_id: plan.id.clone() }).await;
                     return Ok(Outcome::new(
                         json!({ "plan_id": plan.id, "cancelled": true }),
                         |theme| {
@@ -429,6 +430,7 @@ fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {
         let fee = exec
             .fee
             .iter()
+            .filter(|(a, _)| !a.is_zero())
             .map(|(a, asset)| format!("{} {asset}", a.normalize()))
             .collect::<Vec<_>>()
             .join(" + ");
@@ -445,7 +447,7 @@ fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {
                 ("side", side),
                 ("qty", &format!("{} {}", qty(exec.executed_qty), exec.base)),
                 ("avg", &exec.avg_price.map(money).unwrap_or_default()),
-                ("total", &format!("{} {}", qty(exec.quote_qty), exec.quote)),
+                ("total", &format!("{} {}", onra_ui::format::price(exec.quote_qty, 2), exec.quote)),
             ],
         );
         lines.push(format!("  {} {text}", theme.brand("✓")));

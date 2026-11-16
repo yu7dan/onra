@@ -235,7 +235,19 @@ impl Verdict {
 }
 
 fn usd(v: Decimal) -> String {
-    format!("${}", v.round_dp(2).normalize())
+    let text = v.round_dp(2).normalize().to_string();
+    let (whole, frac) = text.split_once('.').map_or((text.as_str(), None), |(w, f)| (w, Some(f)));
+    let mut grouped = String::new();
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    match frac {
+        Some(f) => format!("${grouped}.{f}"),
+        None => format!("${grouped}"),
+    }
 }
 
 fn check(rule: &str, passed: bool, value: String, limit: String) -> Check {
@@ -366,6 +378,8 @@ mod tests {
         let spent = Usage { spent_today_usd: Decimal::from(450), trades_last_minute: 0 };
         let daily = evaluate(&p, &intent(80, Initiator::Human), &spent, false);
         assert_eq!(daily.failed().next().unwrap().value, "$530");
+        let huge = evaluate(&p, &intent(32_311, Initiator::Human), &Usage::default(), false);
+        assert_eq!(huge.failed().next().unwrap().value, "$32,311");
 
         let mut exit = intent(5000, Initiator::Human);
         exit.reduce_only = true;

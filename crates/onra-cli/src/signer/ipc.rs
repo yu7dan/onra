@@ -51,6 +51,10 @@ pub enum Request {
         plan_id: String,
     },
     Plans,
+    /// Forget a plan that was turned down on screen.
+    Discard {
+        plan_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

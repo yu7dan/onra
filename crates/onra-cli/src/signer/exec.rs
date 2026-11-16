@@ -402,6 +402,15 @@ pub async fn execute(
                 Some(initiator),
                 json!({
                     "plan_id": exec.plan_id,
+                    "summary": format!(
+                        "{} {} {} {}{} · order {}",
+                        exec.status.to_ascii_uppercase(),
+                        exec.executed_qty.normalize(),
+                        exec.base,
+                        exec.avg_price.map(|p| format!("@ {} ", p.normalize())).unwrap_or_default(),
+                        exec.quote,
+                        exec.order_id
+                    ),
                     "order_id": exec.order_id,
                     "status": exec.status,
                     "executed_qty": exec.executed_qty.normalize().to_string(),

@@ -143,7 +143,8 @@ async fn handle(conn: Stream, state: &Mutex<State>, vault: &TradingVault, venues
         | Request::Exec { .. }
         | Request::Approve { .. }
         | Request::Show { .. }
-        | Request::Plans => trade(request, state, vault, venues).await,
+        | Request::Plans
+        | Request::Discard { .. } => trade(request, state, vault, venues).await,
         other => apply(other, state, vault),
     };
     let response = match result {
@@ -280,6 +281,18 @@ async fn trade(
                     .with_hint(json!({ "cause": "plan_expired", "plan_id": plan_id }))
             })?;
             Ok(to_value(&p.plan))
+        }
+        Request::Discard { plan_id } => {
+            let pending = take(state, &plan_id)?;
+            let (_, seal) = credentials(state, pending.plan.venue, pending.plan.testnet)?;
+            guard::audit_log()?.append(
+                &seal,
+                guard::now_ms(),
+                "cancelled",
+                Some(pending.plan.initiator),
+                json!({ "plan_id": plan_id, "summary": pending.plan.summary() }),
+            )?;
+            Ok(json!({ "plan_id": plan_id, "cancelled": true }))
         }
         Request::Plans => {
             let mut s = state.lock().expect("state lock");

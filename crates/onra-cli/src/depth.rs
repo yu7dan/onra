@@ -76,7 +76,7 @@ const EIGHTHS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '�
 fn bar(fraction: f64) -> String {
     let eighths = (fraction.clamp(0.0, 1.0) * (BAR * 8) as f64).round() as usize;
     let mut s = "█".repeat(eighths / 8);
-    if eighths % 8 > 0 {
+    if !eighths.is_multiple_of(8) {
         s.push(EIGHTHS[eighths % 8 - 1]);
     }
     s
@@ -208,7 +208,7 @@ pub async fn funding(venues: &Venues, assets: &[String], top: usize) -> Result<O
     let wanted: Vec<String> = if assets.is_empty() {
         let mut hl: Vec<&FundingRate> =
             all.iter().filter(|r| r.venue == VenueId::Hyperliquid).collect();
-        hl.sort_by(|a, b| b.open_interest_usd.cmp(&a.open_interest_usd));
+        hl.sort_by_key(|r| std::cmp::Reverse(r.open_interest_usd));
         hl.into_iter().take(top).map(|r| r.asset.clone()).collect()
     } else {
         assets.iter().map(|a| a.to_ascii_uppercase()).collect()

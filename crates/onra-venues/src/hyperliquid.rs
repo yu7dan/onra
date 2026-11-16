@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use onra_core::{Market, MarketKind, MarketQuery, Result, Ticker, VenueId};
+use onra_core::{Market, MarketKind, MarketQuery, Result, SearchHit, Ticker, VenueId};
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -121,6 +121,39 @@ impl Hyperliquid {
             .get(&coin.to_ascii_uppercase())
             .ok_or_else(|| unexpected(VENUE, format!("unknown coin {coin}")))?;
         decimal(VENUE, perp.ctx.mid_px.as_deref().unwrap_or(&perp.ctx.mark_px))
+    }
+
+    /// Perps matching `query`, including thousand-unit contracts (`kBONK`).
+    pub async fn search(&self, query: &str) -> Result<Vec<SearchHit>> {
+        let q = query.to_ascii_uppercase();
+        let thousand = format!("K{q}");
+        let perps = self.perps().await?;
+        let mut hits: Vec<(bool, SearchHit)> = perps
+            .iter()
+            .filter(|(key, _)| {
+                **key == q || **key == thousand || (q.len() >= 2 && key.starts_with(&q))
+            })
+            .map(|(key, perp)| {
+                let price = perp.ctx.mid_px.as_deref().unwrap_or(&perp.ctx.mark_px);
+                let hit = SearchHit {
+                    market: Market {
+                        venue: VENUE,
+                        symbol: format!("{}-PERP", perp.coin),
+                        base: perp.coin.clone(),
+                        kind: MarketKind::Perp,
+                        venue_symbol: perp.coin.clone(),
+                        verified: true,
+                    },
+                    name: (*key == thousand).then(|| format!("1,000 {q} per contract")),
+                    price: decimal(VENUE, price).ok(),
+                    liquidity_usd: None,
+                    holders: None,
+                };
+                (*key != q && *key != thousand, hit)
+            })
+            .collect();
+        hits.sort_by(|a, b| (a.0, &a.1.market.symbol).cmp(&(b.0, &b.1.market.symbol)));
+        Ok(hits.into_iter().take(6).map(|(_, h)| h).collect())
     }
 
     pub async fn ping(&self) -> Result<()> {

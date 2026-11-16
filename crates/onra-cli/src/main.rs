@@ -4,6 +4,7 @@ mod config;
 mod i18n;
 mod output;
 mod price;
+mod search;
 mod shell;
 mod watch;
 
@@ -74,6 +75,10 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let theme = out.theme().copied();
             let outcome = block_on(commands::price_with_live_progress(&venues, &markets, theme))??;
             Ok(out.emit(outcome))
+        }
+        Command::Search { query } => {
+            let venues = Venues::new(&config.net(cli.proxy))?;
+            Ok(out.emit(block_on(commands::search(&venues, &query.join(" ")))??))
         }
         Command::Watch { markets, interval, count } => {
             let venues = Venues::new(&config.net(cli.proxy))?;

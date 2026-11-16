@@ -37,7 +37,7 @@ use crate::watch::{self, Update, Watch};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PING_EVERY: Duration = Duration::from_secs(60);
 /// Menu entries that work today; the rest show as "coming soon".
-const MENU_READY: [bool; 6] = [true, true, false, false, true, true];
+const MENU_READY: [bool; 7] = [true, true, true, false, false, true, true];
 
 /// What a finished background task produced.
 enum Done {
@@ -328,8 +328,13 @@ impl Shell {
                 self.mode = Mode::PickAsset;
                 None
             }
-            4 => self.run_line("config show", screen, tx),
-            5 => {
+            2 => {
+                self.editor.set("search ");
+                self.mode = Mode::Input;
+                None
+            }
+            5 => self.run_line("config show", screen, tx),
+            6 => {
                 self.quit = true;
                 None
             }
@@ -590,6 +595,14 @@ impl Shell {
                 Some(Box::pin(async move {
                     Done::Outcome(commands::price(&venues, &markets, Some(&tx)).await)
                 }))
+            }
+            Some(Command::Search { query }) => {
+                let venues = self.venues.clone();
+                let query = query.join(" ");
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(
+                    async move { Done::Outcome(commands::search(&venues, &query).await) },
+                ))
             }
             Some(Command::Watch { markets, interval, .. }) => {
                 let venues = self.venues.clone();

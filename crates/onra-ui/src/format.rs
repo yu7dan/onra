@@ -51,6 +51,22 @@ pub fn split_trailing_zeros(formatted: &str) -> (&str, &str) {
     formatted.split_at(keep.min(formatted.len()))
 }
 
+/// Short magnitude for context figures: `950`, `12.3K`, `4.5M`, `1.2B`.
+pub fn compact(value: Decimal) -> String {
+    let abs = value.abs();
+    let (scaled, suffix) = if abs >= Decimal::from(1_000_000_000) {
+        (value / Decimal::from(1_000_000_000), "B")
+    } else if abs >= Decimal::from(1_000_000) {
+        (value / Decimal::from(1_000_000), "M")
+    } else if abs >= Decimal::ONE_THOUSAND {
+        (value / Decimal::ONE_THOUSAND, "K")
+    } else {
+        return value.round_dp(0).to_string();
+    };
+    let rounded = scaled.round_dp(1).normalize();
+    format!("{rounded}{suffix}")
+}
+
 fn group_thousands(s: &str) -> String {
     let (sign, rest) = s.strip_prefix('-').map_or(("", s), |r| ("-", r));
     let (int, frac) = rest.split_once('.').map_or((rest, None), |(i, f)| (i, Some(f)));
@@ -98,6 +114,14 @@ mod tests {
         assert_eq!(percent(d("2.031")), "+2.03%");
         assert_eq!(percent(d("-2.031")), "−2.03%");
         assert_eq!(percent(d("-0.001")), "+0.00%");
+    }
+
+    #[test]
+    fn compacts_magnitudes() {
+        assert_eq!(compact(d("950.4")), "950");
+        assert_eq!(compact(d("12345")), "12.3K");
+        assert_eq!(compact(d("4500000")), "4.5M");
+        assert_eq!(compact(d("2000000000")), "2B");
     }
 
     #[test]

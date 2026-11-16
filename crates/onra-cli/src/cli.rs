@@ -60,6 +60,19 @@ Examples:
         markets: Vec<String>,
     },
 
+    /// Find an asset's markets on every venue, with verification status.
+    #[command(after_help = "\
+Solana is full of tokens that copy real tickers. Search shows which one is
+verified (✓) and flags the rest (⚠).
+
+Examples:
+  onra search bonk
+  onra search \"jupiter\"")]
+    Search {
+        #[arg(required = true, value_name = "QUERY")]
+        query: Vec<String>,
+    },
+
     /// Live prices. Press q or Esc to stop.
     #[command(after_help = "\
 In JSON mode each refresh is one line (NDJSON): a \"snapshot\" event with the

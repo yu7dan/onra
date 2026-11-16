@@ -33,3 +33,17 @@ pub struct Ticker {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trend_24h: Vec<Decimal>,
 }
+
+/// A market found by search, with whatever context the venue offers.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub market: Market,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liquidity_usd: Option<Decimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holders: Option<u64>,
+}

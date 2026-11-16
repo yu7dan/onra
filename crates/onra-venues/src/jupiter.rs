@@ -1,4 +1,4 @@
-use onra_core::{Market, MarketKind, MarketQuery, Result, Ticker, VenueId};
+use onra_core::{Market, MarketKind, MarketQuery, Result, SearchHit, Ticker, VenueId};
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -18,6 +18,10 @@ struct Token {
     id: String,
     symbol: String,
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    holder_count: Option<u64>,
+    #[serde(default)]
     is_verified: bool,
     usd_price: Option<f64>,
     liquidity: Option<f64>,
@@ -33,6 +37,48 @@ struct Stats {
 impl Jupiter {
     pub fn new(http: Client) -> Self {
         Self { http }
+    }
+
+    /// Tokens matching `query`: verified first, then by liquidity. Both kinds
+    /// are returned, because impersonators must be visible to be avoided.
+    pub async fn search(&self, query: &str) -> Result<Vec<SearchHit>> {
+        let resp = self
+            .http
+            .get(format!("{API}/tokens/v2/search"))
+            .query(&[("query", query)])
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(status_error(VENUE, resp.status()));
+        }
+        let mut tokens: Vec<Token> = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
+        tokens.sort_by(|a, b| {
+            b.is_verified
+                .cmp(&a.is_verified)
+                .then(b.liquidity.unwrap_or(0.0).total_cmp(&a.liquidity.unwrap_or(0.0)))
+        });
+        Ok(tokens
+            .into_iter()
+            .take(6)
+            .map(|t| {
+                let symbol = t.symbol.to_ascii_uppercase();
+                SearchHit {
+                    market: Market {
+                        venue: VENUE,
+                        symbol: symbol.clone(),
+                        base: symbol,
+                        kind: MarketKind::Spot,
+                        venue_symbol: t.id,
+                        verified: t.is_verified,
+                    },
+                    name: t.name,
+                    price: t.usd_price.and_then(decimal_f64),
+                    liquidity_usd: t.liquidity.and_then(decimal_f64).map(|d| d.round_dp(0)),
+                    holders: t.holder_count,
+                }
+            })
+            .collect())
     }
 
     /// USD price for a mint.

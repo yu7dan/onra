@@ -16,7 +16,7 @@ impl Lang {
 
 pub struct Strings {
     pub ask: &'static str,
-    pub menu: [(&'static str, &'static str); 6],
+    pub menu: [(&'static str, &'static str); 7],
     pub soon: &'static str,
     pub placeholder: &'static str,
     pub hints_menu: &'static str,
@@ -33,7 +33,7 @@ pub struct Strings {
     pub cancelled: &'static str,
     pub bye: &'static str,
     pub help_title: &'static str,
-    pub help: [(&'static str, &'static str); 8],
+    pub help: [(&'static str, &'static str); 9],
     pub offline: &'static str,
 }
 
@@ -42,6 +42,7 @@ pub const ZH: Strings = Strings {
     menu: [
         ("查行情", "看一个币在各家市场的价格"),
         ("盯盘", "实时刷新价格"),
+        ("搜索", "找币种和市场，识别仿冒币"),
         ("我的资产", "余额 · 持仓 · 挂单"),
         ("交易", "现货 · 合约"),
         ("设置", "代理 · 涨跌颜色"),
@@ -66,6 +67,7 @@ pub const ZH: Strings = Strings {
     help: [
         ("price <币>", "跨市场价格，比如 price SOL ETH、price ETH-PERP@hl"),
         ("watch <币>", "实时盯盘，比如 watch SOL BTC"),
+        ("search <关键词>", "在各家市场搜索，标出已验证和仿冒的代币"),
         ("config show", "查看设置"),
         ("config set <键> <值>", "修改设置，比如 config set network.proxy http://127.0.0.1:7890"),
         ("menu", "回到菜单"),
@@ -81,6 +83,7 @@ pub const EN: Strings = Strings {
     menu: [
         ("Prices", "One asset across every venue"),
         ("Watch", "Live prices"),
+        ("Search", "Find markets, spot impostor tokens"),
         ("Portfolio", "Balances · positions · orders"),
         ("Trade", "Spot · perps"),
         ("Settings", "Proxy · up/down colors"),
@@ -105,6 +108,7 @@ pub const EN: Strings = Strings {
     help: [
         ("price <asset>", "Cross-venue prices, e.g. price SOL ETH, price ETH-PERP@hl"),
         ("watch <asset>", "Live prices, e.g. watch SOL BTC"),
+        ("search <text>", "Search every venue; verified and impostor tokens marked"),
         ("config show", "Show settings"),
         (
             "config set <key> <value>",

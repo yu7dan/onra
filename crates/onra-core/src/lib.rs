@@ -9,4 +9,4 @@ mod ticker;
 
 pub use error::{Error, ErrorCode, Result};
 pub use market::{MarketKind, MarketQuery, VenueId};
-pub use ticker::{Market, Ticker};
+pub use ticker::{Market, SearchHit, Ticker};

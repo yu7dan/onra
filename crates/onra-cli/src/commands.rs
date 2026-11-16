@@ -43,6 +43,12 @@ pub async fn price(
     Ok(Outcome::new(data, move |theme| price::render(&report, theme, elapsed)))
 }
 
+pub async fn search(venues: &Venues, query: &str) -> Result<Outcome> {
+    let results = crate::search::search(venues, query).await?;
+    let data = serde_json::to_value(&results).expect("results serialize");
+    Ok(Outcome::new(data, move |theme| crate::search::render(&results, theme)))
+}
+
 pub fn config(action: ConfigAction, config: &mut Config) -> Result<Outcome> {
     match action {
         ConfigAction::Path => {

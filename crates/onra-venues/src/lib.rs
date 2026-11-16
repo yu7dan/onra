@@ -6,7 +6,7 @@ mod http;
 mod hyperliquid;
 mod jupiter;
 
-use onra_core::{Market, MarketQuery, Result, Ticker, VenueId};
+use onra_core::{Market, MarketQuery, Result, SearchHit, Ticker, VenueId};
 use rust_decimal::Decimal;
 
 pub use http::NetConfig;
@@ -34,6 +34,15 @@ impl Venues {
             VenueId::Binance => self.binance.quote(&market.venue_symbol).await,
             VenueId::Hyperliquid => self.hyperliquid.quote(&market.venue_symbol).await,
             VenueId::Jupiter => self.jupiter.quote(&market.venue_symbol).await,
+        }
+    }
+
+    /// Markets on `venue` matching a free-text `query`.
+    pub async fn search(&self, venue: VenueId, query: &str) -> Result<Vec<SearchHit>> {
+        match venue {
+            VenueId::Binance => self.binance.search(query).await,
+            VenueId::Hyperliquid => self.hyperliquid.search(query).await,
+            VenueId::Jupiter => self.jupiter.search(query).await,
         }
     }
 

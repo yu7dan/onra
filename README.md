@@ -184,7 +184,7 @@ flowchart LR
 | | Milestone | Scope |
 |:-:|---|---|
 | ✅ | **M0 Foundation** | Output contract, rendering, brand, `price` across three venues |
-| 🚧 | **M1 Interaction** | ✅ home screen, menus, completion, history · ✅ `watch` · ⏳ `search` |
+| ✅ | **M1 Interaction** | Home screen, menus, completion, history · `watch` live prices · `search` with impostor detection |
 | ⏳ | **M2 Accounts** | Local keystore, balances, positions, orders, order books |
 | ⏳ | **M3 Trading** | Plan → simulate → policy → confirm → execute, signer daemon, audit log |
 | ⏳ | **M4 Intelligence** | Natural-language assistant (bring your own model), MCP server, agent identities |

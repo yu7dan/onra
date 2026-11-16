@@ -1,4 +1,6 @@
-use onra_core::{Error, ErrorCode, Market, MarketKind, MarketQuery, Result, Ticker, VenueId};
+use onra_core::{
+    Error, ErrorCode, Market, MarketKind, MarketQuery, Result, SearchHit, Ticker, VenueId,
+};
 use reqwest::{Client, StatusCode};
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -66,6 +68,71 @@ impl Binance {
         }
         let p: Price = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
         decimal(VENUE, &p.price)
+    }
+
+    /// Spot pairs whose base matches `query`, most relevant first.
+    pub async fn search(&self, query: &str) -> Result<Vec<SearchHit>> {
+        // In display priority: the deepest books first. None of these is a
+        // suffix of another, so matching order doesn't matter.
+        const QUOTES: [&str; 6] = ["USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
+        #[derive(Deserialize)]
+        struct Price {
+            symbol: String,
+            price: String,
+        }
+        let resp = self
+            .http
+            .get(format!("{API}/ticker/price"))
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(status_error(VENUE, resp.status()));
+        }
+        let all: Vec<Price> = resp.json().await.map_err(|e| transport_error(VENUE, e))?;
+
+        let q = query.to_ascii_uppercase();
+        let mut hits: Vec<(bool, usize, SearchHit)> = Vec::new();
+        for p in all {
+            let Some((qi, quote)) = QUOTES
+                .iter()
+                .enumerate()
+                .find(|(_, quote)| p.symbol.len() > quote.len() && p.symbol.ends_with(*quote))
+            else {
+                continue;
+            };
+            let base = &p.symbol[..p.symbol.len() - quote.len()];
+            let exact = base == q;
+            if !exact && !(q.len() >= 2 && base.starts_with(&q)) {
+                continue;
+            }
+            // Delisted pairs report a zero price.
+            let Some(price) = decimal(VENUE, &p.price).ok().filter(|d| !d.is_zero()) else {
+                continue;
+            };
+            hits.push((
+                !exact,
+                qi,
+                SearchHit {
+                    market: Market {
+                        venue: VENUE,
+                        symbol: format!("{base}/{quote}"),
+                        base: base.to_string(),
+                        kind: MarketKind::Spot,
+                        venue_symbol: p.symbol.clone(),
+                        verified: true,
+                    },
+                    name: None,
+                    price: Some(price),
+                    liquidity_usd: None,
+                    holders: None,
+                },
+            ));
+        }
+        hits.sort_by(|a, b| {
+            (a.0, a.1, a.2.market.base.len()).cmp(&(b.0, b.1, b.2.market.base.len()))
+        });
+        Ok(hits.into_iter().take(4).map(|(_, _, h)| h).collect())
     }
 
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {

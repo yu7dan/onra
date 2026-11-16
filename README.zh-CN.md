@@ -69,6 +69,15 @@ $ ./target/release/onra price SOL ETH
 $ ./target/release/onra watch BTC-PERP@hl --interval 0.5
 ```
 
+绑定账户后可以查看资产。钱包只需要公开地址；币安用只读 API key（开了提现权限的 key 会被拒绝），存放在系统密钥链里：
+
+```console
+$ onra account add hl 0x…
+$ onra account add sol <地址>
+$ onra account login bn            # 隐藏输入
+$ onra portfolio                   # 余额、持仓、挂单
+```
+
 网络需要代理？`onra config set network.proxy http://127.0.0.1:7890`，支持 `http://`、`https://` 和 `socks5://`。
 
 涨跌颜色默认跟随系统语言：中文、日文、韩文系统红涨绿跌，可用 `onra config set ui.color_convention west` 切换。
@@ -99,7 +108,7 @@ $ ./target/release/onra watch BTC-PERP@hl --interval 0.5
 |:-:|---|---|
 | ✅ | **M0 地基** | 输出协议、渲染、品牌、三家市场的 `price` |
 | ✅ | **M1 交互** | 首页、菜单、补全、历史 · `watch` 实时盯盘 · `search` 识别仿冒币 |
-| ⏳ | **M2 账户** | 本地密钥库、余额、持仓、挂单、订单簿 |
+| 🚧 | **M2 账户** | ✅ 系统密钥链、余额、持仓、挂单、资产打码 · ⏳ 订单簿、资金费率 |
 | ⏳ | **M3 交易** | 方案 → 模拟 → 风控 → 确认 → 执行、签名进程、审计日志 |
 | ⏳ | **M4 智能** | 自然语言助手（自带模型）、MCP、Agent 身份 |
 | ⏳ | **M5 发布** | 安装包、文档、v0.5 |

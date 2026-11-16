@@ -85,6 +85,17 @@ $ ./target/release/onra price SOL ETH
 $ ./target/release/onra watch BTC-PERP@hl --interval 0.5
 ```
 
+Link accounts to see what you hold. Wallets need only their public address;
+Binance takes a read-only API key (keys that can withdraw are refused), kept
+in the system keychain:
+
+```console
+$ onra account add hl 0x…
+$ onra account add sol <address>
+$ onra account login bn            # hidden prompt
+$ onra portfolio                   # balances, positions, open orders
+```
+
 Behind a firewall? `onra config set network.proxy http://127.0.0.1:7890`.
 `http://`, `https://` and `socks5://` all work.
 
@@ -178,7 +189,7 @@ flowchart LR
 |:-:|---|---|
 | ✅ | **M0 Foundation** | Output contract, rendering, brand, `price` across three venues |
 | ✅ | **M1 Interaction** | Home screen, menus, completion, history · `watch` live prices · `search` with impostor detection |
-| ⏳ | **M2 Accounts** | Local keystore, balances, positions, orders, order books |
+| 🚧 | **M2 Accounts** | ✅ keychain-backed accounts, balances, positions, orders, masked totals · ⏳ order books, funding |
 | ⏳ | **M3 Trading** | Plan → simulate → policy → confirm → execute, signer daemon, audit log |
 | ⏳ | **M4 Intelligence** | Natural-language assistant (bring your own model), MCP server, agent identities |
 | ⏳ | **M5 Release** | Installers, docs, v0.5 |

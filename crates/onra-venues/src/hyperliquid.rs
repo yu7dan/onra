@@ -6,7 +6,10 @@ use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::OnceCell;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::Mutex;
 
 use crate::http::{decimal, pct_change, transport_error, unexpected};
 
@@ -15,10 +18,14 @@ const INFO_URL: &str = "https://api.hyperliquid.xyz/info";
 
 pub struct Hyperliquid {
     http: Client,
-    /// Perp contexts keyed by uppercased coin name. Fetched once per process
-    /// and shared by concurrent lookups.
-    perps: OnceCell<HashMap<String, Perp>>,
+    /// Perp contexts keyed by uppercased coin name. One snapshot serves all
+    /// lookups within a short window (a multi-asset `price` is one request),
+    /// but a long-lived session still sees fresh prices.
+    perps: Mutex<Option<Snapshot>>,
 }
+
+/// When it was taken, and the perps by uppercased coin name.
+type Snapshot = (Instant, Arc<HashMap<String, Perp>>);
 
 struct Perp {
     /// Hyperliquid's own name; case matters (`kPEPE`).
@@ -64,7 +71,7 @@ struct Day {
 
 impl Hyperliquid {
     pub fn new(http: Client) -> Self {
-        Self { http, perps: OnceCell::new() }
+        Self { http, perps: Mutex::new(None) }
     }
 
     async fn info<T: serde::de::DeserializeOwned>(&self, body: serde_json::Value) -> Result<T> {
@@ -81,26 +88,39 @@ impl Hyperliquid {
         resp.json().await.map_err(|e| transport_error(VENUE, e))
     }
 
-    async fn perps(&self) -> Result<&HashMap<String, Perp>> {
-        self.perps
-            .get_or_try_init(|| async {
-                let (meta, ctxs): (Meta, Vec<AssetCtx>) =
-                    self.info(json!({ "type": "metaAndAssetCtxs" })).await?;
-                Ok(meta
-                    .universe
-                    .into_iter()
-                    .zip(ctxs)
-                    .filter(|(asset, _)| !asset.is_delisted)
-                    .map(|(asset, ctx)| {
-                        (asset.name.to_ascii_uppercase(), Perp { coin: asset.name, ctx })
-                    })
-                    .collect())
-            })
-            .await
+    async fn perps(&self) -> Result<Arc<HashMap<String, Perp>>> {
+        const FRESH: Duration = Duration::from_millis(1500);
+        // Holding the lock while fetching makes concurrent callers share one
+        // request instead of racing.
+        let mut cache = self.perps.lock().await;
+        if let Some((at, perps)) = cache.as_ref()
+            && at.elapsed() < FRESH
+        {
+            return Ok(perps.clone());
+        }
+        let (meta, ctxs): (Meta, Vec<AssetCtx>) =
+            self.info(json!({ "type": "metaAndAssetCtxs" })).await?;
+        let perps: Arc<HashMap<_, _>> = Arc::new(
+            meta.universe
+                .into_iter()
+                .zip(ctxs)
+                .filter(|(asset, _)| !asset.is_delisted)
+                .map(|(asset, ctx)| {
+                    (asset.name.to_ascii_uppercase(), Perp { coin: asset.name, ctx })
+                })
+                .collect(),
+        );
+        *cache = Some((Instant::now(), perps.clone()));
+        Ok(perps)
+    }
+
+    pub async fn ping(&self) -> Result<()> {
+        self.perps().await.map(|_| ())
     }
 
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {
-        let Some(perp) = self.perps().await?.get(&query.base) else {
+        let perps = self.perps().await?;
+        let Some(perp) = perps.get(&query.base) else {
             return Ok(None);
         };
         let price = decimal(VENUE, perp.ctx.mid_px.as_deref().unwrap_or(&perp.ctx.mark_px))?;

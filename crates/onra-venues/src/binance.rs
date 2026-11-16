@@ -35,6 +35,19 @@ impl Binance {
         Self { http }
     }
 
+    pub async fn ping(&self) -> Result<()> {
+        let resp = self
+            .http
+            .get(format!("{API}/ping"))
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+        }
+        Ok(())
+    }
+
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {
         let quote = query.quote.as_deref().unwrap_or(DEFAULT_QUOTE);
         let pair = format!("{}{quote}", query.base);

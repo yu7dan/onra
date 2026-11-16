@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "BUSL-1.1"
 repository = "https://github.com/yu7dan/onra"
 
@@ -16,14 +16,16 @@ onra-venues = { path = "crates/onra-venues" }
 onra-ui = { path = "crates/onra-ui" }
 
 clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"
 enable-ansi-support = "0.2"
 futures = "0.3"
 humantime = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 rust_decimal = { version = "1", features = ["serde-with-str"] }
+shell-words = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 sys-locale = "0.3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }

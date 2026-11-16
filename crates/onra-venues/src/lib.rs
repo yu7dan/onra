@@ -26,6 +26,15 @@ impl Venues {
         })
     }
 
+    /// A cheap request proving the venue is reachable.
+    pub async fn ping(&self, venue: VenueId) -> Result<()> {
+        match venue {
+            VenueId::Binance => self.binance.ping().await,
+            VenueId::Hyperliquid => self.hyperliquid.ping().await,
+            VenueId::Jupiter => self.jupiter.ping().await,
+        }
+    }
+
     /// Look up `query` on `venue`. `Ok(None)` means the venue answered but
     /// doesn't list the market.
     pub async fn ticker(&self, venue: VenueId, query: &MarketQuery) -> Result<Option<Ticker>> {

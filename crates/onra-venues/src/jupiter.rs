@@ -34,6 +34,21 @@ impl Jupiter {
         Self { http }
     }
 
+    pub async fn ping(&self) -> Result<()> {
+        const SOL: &str = "So11111111111111111111111111111111111111112";
+        let resp = self
+            .http
+            .get(format!("{API}/price/v3"))
+            .query(&[("ids", SOL)])
+            .send()
+            .await
+            .map_err(|e| transport_error(VENUE, e))?;
+        if !resp.status().is_success() {
+            return Err(unexpected(VENUE, format!("HTTP {}", resp.status())));
+        }
+        Ok(())
+    }
+
     pub async fn ticker(&self, query: &MarketQuery) -> Result<Option<Ticker>> {
         let resp = self
             .http

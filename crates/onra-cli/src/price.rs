@@ -9,12 +9,12 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use onra_core::{Error, ErrorCode, MarketQuery, Result, Ticker, VenueId};
 use onra_proto::Warning;
-use onra_ui::motion::Live;
 use onra_ui::{Align, Cell, Rgb, Table, Theme, format, palette, sparkline_styled};
 use onra_venues::Venues;
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Serialize)]
 pub struct Report {
@@ -46,11 +46,25 @@ pub struct Quote {
     pub latency_ms: u64,
 }
 
+/// Progress events from [`fetch`]. The caller decides how to show them.
+#[derive(Debug)]
+pub enum Progress {
+    /// A lookup on this venue has started.
+    Expect(VenueId),
+    /// A lookup on this venue finished.
+    Done { venue: VenueId, error: Option<String>, elapsed: Duration },
+}
+
 pub async fn fetch(
     venues: &Venues,
     inputs: &[String],
-    mut loader: Option<Loader>,
+    progress: Option<&UnboundedSender<Progress>>,
 ) -> Result<Report> {
+    let send = |event: Progress| {
+        if let Some(tx) = progress {
+            let _ = tx.send(event);
+        }
+    };
     let queries = inputs.iter().map(|s| s.parse()).collect::<Result<Vec<MarketQuery>>>()?;
     let queries = &queries;
 
@@ -66,34 +80,18 @@ pub async fn fetch(
             (qi, venue, result, started.elapsed())
         })
         .collect();
-    if let Some(loader) = &mut loader {
-        for q in queries {
-            loader.expect(VenueId::ALL.into_iter().filter(|&v| q.applies_to(v)));
+    for q in queries {
+        for venue in VenueId::ALL.into_iter().filter(|&v| q.applies_to(v)) {
+            send(Progress::Expect(venue));
         }
     }
 
     let mut results = Vec::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(60));
-    loop {
-        tokio::select! {
-            next = pending.next() => match next {
-                Some(result) => {
-                    if let Some(loader) = &mut loader {
-                        loader.record(result.1, result.2.as_ref().err(), result.3);
-                    }
-                    results.push(result);
-                }
-                None => break,
-            },
-            _ = tick.tick(), if loader.is_some() => {
-                if let Some(loader) = &mut loader {
-                    loader.draw();
-                }
-            }
-        }
-    }
-    if let Some(loader) = loader {
-        loader.clear();
+    while let Some(result) = pending.next().await {
+        let (_, venue, outcome, elapsed) = &result;
+        let error = outcome.as_ref().err().map(|e| e.message.clone());
+        send(Progress::Done { venue: *venue, error, elapsed: *elapsed });
+        results.push(result);
     }
     // Results arrive in completion order; present them in request order,
     // then in the canonical venue order.
@@ -151,7 +149,7 @@ fn summarize(query: &str, quotes: Vec<Quote>) -> Asset {
     let mut prices: Vec<Decimal> = quotes.iter().map(|q| q.ticker.price).collect();
     prices.sort();
     let mid = prices.len() / 2;
-    let reference_price = if prices.len() % 2 == 0 {
+    let reference_price = if prices.len().is_multiple_of(2) {
         (prices[mid - 1] + prices[mid]) / Decimal::TWO
     } else {
         prices[mid]
@@ -179,7 +177,7 @@ fn summarize(query: &str, quotes: Vec<Quote>) -> Asset {
 /// Spreads at or above this are worth a second look, so they're highlighted.
 const NOTABLE_SPREAD_PCT: Decimal = Decimal::from_parts(5, 0, 0, false, 1);
 
-fn venue_color(venue: VenueId) -> Rgb {
+pub fn venue_color(venue: VenueId) -> Rgb {
     match venue {
         VenueId::Binance => Rgb(240, 185, 11),
         VenueId::Hyperliquid => Rgb(80, 227, 194),
@@ -376,12 +374,10 @@ fn display_width(s: &str) -> usize {
 // ---------------------------------------------------------------------------
 // Live progress while venues answer
 
-/// Per-venue progress shown while a fetch is in flight. Stays invisible for
-/// fast responses, so it never flashes.
+/// Per-venue progress while a fetch is in flight, as renderable lines.
+/// Owns no terminal: callers draw `lines` wherever they display progress.
+#[derive(Default)]
 pub struct Loader {
-    theme: Theme,
-    started: Instant,
-    live: Option<Live>,
     venues: Vec<(VenueId, VenueState)>,
 }
 
@@ -391,75 +387,63 @@ enum VenueState {
 }
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const APPEAR_AFTER: Duration = Duration::from_millis(90);
+/// Progress stays hidden this long, so fast responses never flash.
+pub const LOADER_DELAY: Duration = Duration::from_millis(90);
 
 impl Loader {
-    pub fn new(theme: Theme) -> Self {
-        Self { theme, started: Instant::now(), live: None, venues: Vec::new() }
-    }
-
-    fn expect(&mut self, venues: impl Iterator<Item = VenueId>) {
-        for venue in venues {
-            match self.venues.iter_mut().find(|(v, _)| *v == venue) {
-                Some((_, VenueState::Waiting { remaining, .. })) => *remaining += 1,
-                Some(_) => {}
-                None => self.venues.push((
-                    venue,
-                    VenueState::Waiting { remaining: 1, slowest: Duration::ZERO, failed: None },
-                )),
+    pub fn apply(&mut self, event: Progress) {
+        match event {
+            Progress::Expect(venue) => {
+                match self.venues.iter_mut().find(|(v, _)| *v == venue) {
+                    Some((_, VenueState::Waiting { remaining, .. })) => *remaining += 1,
+                    Some(_) => {}
+                    None => self.venues.push((
+                        venue,
+                        VenueState::Waiting { remaining: 1, slowest: Duration::ZERO, failed: None },
+                    )),
+                }
+                self.venues.sort_by_key(|(v, _)| VenueId::ALL.iter().position(|x| x == v));
+            }
+            Progress::Done { venue, error, elapsed } => {
+                let Some((_, state)) = self.venues.iter_mut().find(|(v, _)| *v == venue) else {
+                    return;
+                };
+                if let VenueState::Waiting { remaining, slowest, failed } = state {
+                    *remaining = remaining.saturating_sub(1);
+                    *slowest = (*slowest).max(elapsed);
+                    if let Some(e) = error {
+                        failed.get_or_insert(e);
+                    }
+                    if *remaining == 0 {
+                        *state = VenueState::Done { slowest: *slowest, failed: failed.take() };
+                    }
+                }
             }
         }
-        self.venues.sort_by_key(|(v, _)| VenueId::ALL.iter().position(|x| x == v));
     }
 
-    fn record(&mut self, venue: VenueId, error: Option<&Error>, elapsed: Duration) {
-        let Some((_, state)) = self.venues.iter_mut().find(|(v, _)| *v == venue) else {
-            return;
-        };
-        if let VenueState::Waiting { remaining, slowest, failed } = state {
-            *remaining -= 1;
-            *slowest = (*slowest).max(elapsed);
-            if let Some(e) = error {
-                failed.get_or_insert_with(|| e.message.clone());
-            }
-            if *remaining == 0 {
-                *state = VenueState::Done { slowest: *slowest, failed: failed.take() };
-            }
-        }
-        self.draw();
-    }
-
-    fn draw(&mut self) {
-        let elapsed = self.started.elapsed();
-        if elapsed < APPEAR_AFTER {
-            return;
-        }
-        let theme = &self.theme;
+    /// The progress block at `elapsed` since the fetch began.
+    pub fn lines(&self, theme: &Theme, elapsed: Duration) -> Vec<String> {
         let frame = (elapsed.as_millis() / 80) as usize;
         let spin = SPINNER[frame % SPINNER.len()].to_string();
         let done = self.venues.iter().filter(|(_, s)| matches!(s, VenueState::Done { .. })).count();
 
-        let mut lines = vec![
-            String::new(),
-            format!(
-                "  {} {}  {}",
-                theme.brand(&spin),
-                theme.shimmer("reaching markets", elapsed.as_secs_f32() / 1.4),
-                theme.faint(&format!("{done}/{}", self.venues.len())),
-            ),
-        ];
+        let mut lines = vec![format!(
+            "  {} {}  {}",
+            theme.brand(&spin),
+            theme.shimmer("reaching markets", elapsed.as_secs_f32() / 1.4),
+            theme.faint(&format!("{done}/{}", self.venues.len())),
+        )];
         let name_width = self.venues.iter().map(|(v, _)| v.name().len()).max().unwrap_or(0);
         for (venue, state) in &self.venues {
             let name = format!("{:<name_width$}", venue.name());
             let status = match state {
                 VenueState::Waiting { .. } => theme.faint(&spin),
-                VenueState::Done { slowest, failed: None } => {
-                    format!(
-                        "{} {}",
-                        theme.brand("✓"),
-                        theme.faint(&format!("{}ms", slowest.as_millis()))
-                    )
-                }
+                VenueState::Done { slowest, failed: None } => format!(
+                    "{} {}",
+                    theme.brand("✓"),
+                    theme.faint(&format!("{}ms", slowest.as_millis()))
+                ),
                 VenueState::Done { failed: Some(msg), .. } => {
                     format!("{} {}", theme.warn("✗"), theme.faint(msg))
                 }
@@ -470,12 +454,6 @@ impl Loader {
                 theme.dim(&name)
             ));
         }
-        self.live.get_or_insert_with(Live::new).draw(&lines);
-    }
-
-    fn clear(self) {
-        if let Some(live) = self.live {
-            live.clear();
-        }
+        lines
     }
 }

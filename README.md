@@ -157,7 +157,7 @@ allowlists, slippage, leverage) before anything is signed, and a single
 
 ## Build from source
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.88 or newer.
 
 ```console
 $ git clone https://github.com/yu7dan/onra

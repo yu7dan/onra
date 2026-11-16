@@ -10,6 +10,7 @@ mod logo;
 pub mod motion;
 mod spark;
 mod table;
+pub mod text;
 mod theme;
 
 pub use logo::logo;

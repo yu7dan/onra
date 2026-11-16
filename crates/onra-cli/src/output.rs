@@ -47,15 +47,11 @@ impl Output {
         ExitCode::SUCCESS
     }
 
-    /// Like [`Output::success`], but the rendered lines unfold one by one.
-    pub fn success_lines<T: Serialize>(
-        &self,
-        data: &T,
-        render: impl FnOnce(&Theme) -> Vec<String>,
-    ) -> ExitCode {
+    /// Print a command outcome: JSON in machine mode, unfolding lines otherwise.
+    pub fn emit(&self, outcome: crate::commands::Outcome) -> ExitCode {
         match &self.theme {
-            Some(theme) => onra_ui::motion::reveal(&render(theme)),
-            None => print_json(&Envelope::ok(data, Meta::new(self.started.elapsed()))),
+            Some(theme) => onra_ui::motion::reveal(&outcome.render(theme)),
+            None => print_json(&Envelope::ok(&outcome.data, Meta::new(self.started.elapsed()))),
         }
         ExitCode::SUCCESS
     }

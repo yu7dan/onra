@@ -1,7 +1,10 @@
 mod cli;
+mod commands;
 mod config;
+mod i18n;
 mod output;
 mod price;
+mod shell;
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -12,7 +15,7 @@ use onra_ui::{Convention, logo, motion};
 use onra_venues::Venues;
 use serde_json::json;
 
-use crate::cli::{Cli, Command, ConfigAction};
+use crate::cli::{Cli, Command};
 use crate::output::Output;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -46,6 +49,10 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
     let Some(command) = cli.command else {
+        if !cli.version && shell::wanted(out.theme()) {
+            let theme = *out.theme().expect("checked by wanted");
+            return shell::run(config, cli.proxy, theme);
+        }
         let Some(theme) = out.theme() else {
             return Ok(
                 out.success(&json!({ "name": "onra", "version": VERSION }), |_| String::new())
@@ -63,61 +70,11 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
     match command {
         Command::Price { markets } => {
             let venues = Venues::new(&config.net(cli.proxy))?;
-            let loader =
-                out.theme().filter(|_| motion::motion_enabled()).map(|t| price::Loader::new(*t));
-            let started = Instant::now();
-            let report = block_on(price::fetch(&venues, &markets, loader))??;
-            let elapsed = started.elapsed();
-            Ok(out.success_lines(&report, |theme| price::render(&report, theme, elapsed)))
+            let theme = out.theme().copied();
+            let outcome = block_on(commands::price_with_live_progress(&venues, &markets, theme))??;
+            Ok(out.emit(outcome))
         }
-        Command::Config { action } => config_command(action, &mut config, out),
-    }
-}
-
-fn config_command(
-    action: ConfigAction,
-    config: &mut config::Config,
-    out: &Output,
-) -> Result<ExitCode> {
-    match action {
-        ConfigAction::Path => {
-            let path = config::path()?;
-            Ok(out.success(&json!({ "path": path }), |_| format!("{}\n", path.display())))
-        }
-        ConfigAction::Show => {
-            let path = config::path()?;
-            let entries = config.effective();
-            let values: serde_json::Map<_, _> =
-                entries.iter().map(|(k, v, _)| (k.to_string(), v.clone())).collect();
-            Ok(out.success(&json!({ "path": path, "values": values }), |theme| {
-                let mut text = format!("\n  {}\n\n", theme.dim(&path.display().to_string()));
-                for (key, value, is_default) in &entries {
-                    let shown = match value {
-                        serde_json::Value::Null => "—".to_string(),
-                        serde_json::Value::String(s) => s.clone(),
-                        v => v.to_string(),
-                    };
-                    let note = if *is_default { theme.dim("  (default)") } else { String::new() };
-                    text.push_str(&format!("  {key:<22}{}{note}\n", theme.bold(&shown)));
-                }
-                text.push('\n');
-                text
-            }))
-        }
-        ConfigAction::Set { key, value } => {
-            config.set(&key, &value)?;
-            let path = config.save()?;
-            Ok(out.success(&json!({ "key": key, "value": value, "path": path }), |theme| {
-                format!("  {} {key} = {value}\n", theme.brand("✓"))
-            }))
-        }
-        ConfigAction::Unset { key } => {
-            config.unset(&key)?;
-            let path = config.save()?;
-            Ok(out.success(&json!({ "key": key, "path": path }), |theme| {
-                format!("  {} {key} reset to default\n", theme.brand("✓"))
-            }))
-        }
+        Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }
 }
 

@@ -88,15 +88,31 @@ fn parse_pct(text: &str) -> Result<Decimal> {
 // ---------------------------------------------------------------------------
 // buy | sell
 
-pub async fn trade(side: OrderSide, args: TradeArgs, theme: Option<Theme>) -> Result<Outcome> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Buy,
+    Sell,
+    Long,
+    Short,
+    Close,
+}
+
+pub async fn trade(kind: Kind, args: TradeArgs, theme: Option<Theme>) -> Result<Outcome> {
+    let perp = matches!(kind, Kind::Long | Kind::Short | Kind::Close);
+    if args.lev.is_some() && !matches!(kind, Kind::Long | Kind::Short) {
+        return Err(Error::new(ErrorCode::Usage, "--lev is for long and short"));
+    }
     let request = TradeRequest {
         market: args.market,
-        side,
+        side: if matches!(kind, Kind::Buy | Kind::Long) { OrderSide::Buy } else { OrderSide::Sell },
         amount: Amount::parse(&args.amount)?,
         limit: args.limit,
         slippage_pct: args.slippage.as_deref().map(parse_pct).transpose()?,
         testnet: args.testnet,
         client_id: args.client_id,
+        perp,
+        leverage: args.lev,
+        close: kind == Kind::Close,
     };
     let initiator = initiator();
     unlocked().await?;
@@ -249,9 +265,16 @@ fn qty(v: Decimal) -> String {
 pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
     let s = i18n::s();
     let buy = plan.side == OrderSide::Buy;
-    let title = if buy { s.card_buy } else { s.card_sell };
+    let title = match plan.action() {
+        "LONG" => s.card_long,
+        "SHORT" => s.card_short,
+        "CLOSE" => s.card_close,
+        "BUY" => s.card_buy,
+        _ => s.card_sell,
+    };
     let net = if plan.testnet { format!(" · {}", s.testnet) } else { String::new() };
-    let right = format!("binance spot{net}");
+    let right =
+        if plan.perp { format!("hyperliquid perp{net}") } else { format!("binance spot{net}") };
     // Stablecoin amounts to the cent, rounded against the trader: a buy
     // spends at most this, a sell receives at least this.
     let cost = (plan.qty * plan.price).round_dp_with_strategy(
@@ -263,10 +286,15 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
     let line = |plain: String, styled: String| (plain, styled);
     body.push(line(String::new(), String::new()));
     let headline_plain = format!("{} {}", qty(plan.qty), plan.base);
-    let bound = fill(
-        if buy { s.for_at_most } else { s.for_at_least },
-        &[("amount", &format!("{} {}", onra_ui::format::price(cost, 2), plan.quote))],
-    );
+    // Perps don't spend their notional, only margin: say what the size is worth.
+    let bound = if plan.perp {
+        fill(s.notional_about, &[("amount", &format!("${}", onra_ui::format::price(cost, 2)))])
+    } else {
+        fill(
+            if buy { s.for_at_most } else { s.for_at_least },
+            &[("amount", &format!("{} {}", onra_ui::format::price(cost, 2), plan.quote))],
+        )
+    };
     body.push(line(
         format!("  {headline_plain}   {bound}"),
         format!("  {}   {}", theme.strong(&headline_plain), theme.dim(&bound)),
@@ -293,6 +321,29 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
         format!("  {}{order}", label(s.lbl_order)),
         format!("  {}{order}", theme.dim(&label(s.lbl_order))),
     ));
+    if let Some(lev) = plan.leverage {
+        let margin = onra_ui::format::price(plan.qty * plan.price / lev, 2);
+        let text = fill(
+            s.leverage_line,
+            &[("lev", &lev.normalize().to_string()), ("margin", &format!("${margin}"))],
+        );
+        body.push(line(
+            format!("  {}{text}", label(s.lbl_leverage)),
+            format!("  {}{text}", theme.dim(&label(s.lbl_leverage))),
+        ));
+    }
+    if plan.reduce_only {
+        body.push(line(
+            format!("  {}{}", label(""), s.reduce_only_line),
+            format!("  {}{}", label(""), theme.faint(s.reduce_only_line)),
+        ));
+    }
+    if !plan.simulated && plan.perp {
+        body.push(line(
+            format!("  {}✓ {}", label(s.lbl_checked), s.checked_hl),
+            format!("  {}{} {}", theme.dim(&label(s.lbl_checked)), theme.brand("✓"), s.checked_hl),
+        ));
+    }
     if plan.simulated {
         body.push(line(
             format!("  {}✓ {}", label(s.lbl_simulated), s.simulated_ok),
@@ -396,7 +447,13 @@ fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {
             .map(|(a, asset)| format!("{} {asset}", a.normalize()))
             .collect::<Vec<_>>()
             .join(" + ");
-        let side = if exec.side == OrderSide::Buy { s.bought } else { s.sold };
+        let side = match exec.action.as_str() {
+            "LONG" => s.opened_long,
+            "SHORT" => s.opened_short,
+            "CLOSE" => s.closed,
+            _ if exec.side == OrderSide::Buy => s.bought,
+            _ => s.sold,
+        };
         let text = fill(
             s.filled_ok,
             &[
@@ -459,7 +516,26 @@ mod tests {
             created_ms: 0,
             expires_ms: 60_000,
             client_id: "onra-p3fa9c2e1".into(),
+            perp: false,
+            leverage: None,
+            reduce_only: false,
+            asset_index: None,
         }
+    }
+
+    fn perp(close: bool) -> Plan {
+        let mut p = sample(Decision::Allow);
+        p.venue = VenueId::Hyperliquid;
+        p.symbol = "ETH".into();
+        p.base = "ETH".into();
+        p.quote = "USDC".into();
+        p.qty = "0.006".parse().unwrap();
+        p.price = "1807.1".parse().unwrap();
+        p.perp = true;
+        p.reduce_only = close;
+        p.leverage = (!close).then(|| Decimal::from(3));
+        p.simulated = false;
+        p
     }
 
     #[test]
@@ -467,8 +543,16 @@ mod tests {
         let theme = Theme::plain(onra_ui::Convention::West);
         for lang in [i18n::Lang::En, i18n::Lang::Zh] {
             i18n::set(lang);
-            for decision in [Decision::Allow, Decision::Deny, Decision::NeedsApproval] {
-                let lines = card(&sample(decision), &theme, decision == Decision::Allow);
+            let plans = [
+                sample(Decision::Allow),
+                sample(Decision::Deny),
+                sample(Decision::NeedsApproval),
+                perp(false),
+                perp(true),
+            ];
+            for plan in plans {
+                let decision = plan.verdict.decision;
+                let lines = card(&plan, &theme, decision == Decision::Allow);
                 let widths: Vec<usize> = lines.iter().skip(1).map(|l| width(l)).collect();
                 assert!(
                     widths.iter().all(|w| *w == widths[0]),

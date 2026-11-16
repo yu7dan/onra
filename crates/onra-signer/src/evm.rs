@@ -7,6 +7,7 @@ use zeroize::Zeroizing;
 
 use crate::invalid;
 
+#[derive(Clone)]
 pub struct EvmKey {
     key: SigningKey,
 }

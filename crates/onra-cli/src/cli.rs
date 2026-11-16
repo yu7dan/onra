@@ -207,6 +207,32 @@ Examples:
   onra sell ETH 0.1 ETH --limit 2100")]
     Sell(TradeArgs),
 
+    /// Open or add to a long on Hyperliquid perps.
+    #[command(after_help = "\
+Size in the coin or in dollars: 0.05 ETH, $100. Leverage is set with --lev
+(cross margin, 1x when not given) and checked against your policy.
+
+Examples:
+  onra long ETH $100 --lev 3 --testnet
+  onra long BTC 0.002 BTC --limit 60000")]
+    Long(TradeArgs),
+
+    /// Open or add to a short on Hyperliquid perps.
+    #[command(after_help = "\
+Examples:
+  onra short SOL $50 --lev 2 --testnet")]
+    Short(TradeArgs),
+
+    /// Close a Hyperliquid position, all of it or part.
+    #[command(after_help = "\
+Closing only ever shrinks the position, and size and daily limits never
+block it: getting out is always allowed.
+
+Examples:
+  onra close ETH --testnet
+  onra close BTC 50% --testnet")]
+    Close(CloseArgs),
+
     /// Carry out a plan made with --plan.
     Exec {
         #[arg(value_name = "PLAN_ID")]
@@ -332,6 +358,50 @@ pub struct TradeArgs {
     /// Your own order id, so a retried command cannot place a second order.
     #[arg(long, value_name = "ID")]
     pub client_id: Option<String>,
+    /// Perp leverage (long, short), e.g. 3. Cross margin; 1x by default.
+    #[arg(long, value_name = "N")]
+    pub lev: Option<Decimal>,
+}
+
+#[derive(Debug, Args)]
+pub struct CloseArgs {
+    /// The perp, e.g. ETH or ETH-PERP@hl.
+    #[arg(value_name = "MARKET")]
+    pub market: String,
+    /// How much of the position: `50%`, `0.1 ETH`, `$100`. All of it by default.
+    #[arg(num_args = 0..=2, value_name = "AMOUNT")]
+    pub amount: Vec<String>,
+    /// Rest a limit order at this price instead of closing now.
+    #[arg(long, value_name = "PRICE")]
+    pub limit: Option<Decimal>,
+    /// How much worse than the best price a fill may be, e.g. 0.3%.
+    #[arg(long, value_name = "PCT")]
+    pub slippage: Option<String>,
+    #[arg(long)]
+    pub testnet: bool,
+    #[arg(long)]
+    pub plan: bool,
+    #[arg(short, long)]
+    pub yes: bool,
+    #[arg(long, value_name = "ID")]
+    pub client_id: Option<String>,
+}
+
+impl From<CloseArgs> for TradeArgs {
+    fn from(c: CloseArgs) -> Self {
+        let amount = if c.amount.is_empty() { vec!["100%".into()] } else { c.amount };
+        TradeArgs {
+            market: c.market,
+            amount,
+            limit: c.limit,
+            slippage: c.slippage,
+            testnet: c.testnet,
+            plan: c.plan,
+            yes: c.yes,
+            client_id: c.client_id,
+            lev: None,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

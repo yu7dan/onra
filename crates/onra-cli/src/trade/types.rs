@@ -82,6 +82,15 @@ pub struct TradeRequest {
     pub slippage_pct: Option<Decimal>,
     pub testnet: bool,
     pub client_id: Option<String>,
+    /// A perp order (Hyperliquid) rather than spot (Binance).
+    #[serde(default)]
+    pub perp: bool,
+    /// Perp leverage to set before opening; 1x when not given.
+    #[serde(default)]
+    pub leverage: Option<Decimal>,
+    /// Close (part of) the position: the side follows the position.
+    #[serde(default)]
+    pub close: bool,
 }
 
 pub const DEFAULT_SLIPPAGE_PCT: Decimal = Decimal::from_parts(5, 0, 0, false, 1);
@@ -114,15 +123,34 @@ pub struct Plan {
     pub created_ms: u64,
     pub expires_ms: u64,
     pub client_id: String,
+    #[serde(default)]
+    pub perp: bool,
+    /// Leverage set before a perp order opens (cross margin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leverage: Option<Decimal>,
+    /// Only shrinks a position.
+    #[serde(default)]
+    pub reduce_only: bool,
+    /// The venue's index for the asset (Hyperliquid names assets by index).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_index: Option<u32>,
 }
 
 impl Plan {
+    /// LONG, SHORT, CLOSE for perps; BUY, SELL for spot.
+    pub fn action(&self) -> &'static str {
+        match (self.perp, self.reduce_only, self.side) {
+            (true, true, _) => "CLOSE",
+            (true, false, OrderSide::Buy) => "LONG",
+            (true, false, OrderSide::Sell) => "SHORT",
+            (false, _, OrderSide::Buy) => "BUY",
+            (false, _, OrderSide::Sell) => "SELL",
+        }
+    }
+
     /// One line for logs and lists: `BUY 0.00154 BTC @ ≤65,100 · BTCUSDT@bn`.
     pub fn summary(&self) -> String {
-        let side = match self.side {
-            OrderSide::Buy => "BUY",
-            OrderSide::Sell => "SELL",
-        };
+        let side = self.action();
         let bound = if self.time_in_force == "gtc" {
             ""
         } else if self.side == OrderSide::Buy {
@@ -131,13 +159,14 @@ impl Plan {
             "≥"
         };
         let net = if self.testnet { " testnet" } else { "" };
+        let lev = self.leverage.map(|l| format!(" · {}x", l.normalize())).unwrap_or_default();
+        let market = if self.perp { format!("{}-PERP", self.symbol) } else { self.symbol.clone() };
         format!(
-            "{side} {} {} @ {bound}{} {} · {}@{}{net}",
+            "{side} {} {} @ {bound}{} {}{lev} · {market}@{}{net}",
             self.qty.normalize(),
             self.base,
             self.price.normalize(),
             self.quote,
-            self.symbol,
             self.venue.alias()
         )
     }
@@ -147,6 +176,8 @@ impl Plan {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Execution {
     pub plan_id: String,
+    #[serde(default)]
+    pub action: String,
     pub side: OrderSide,
     pub base: String,
     pub quote: String,

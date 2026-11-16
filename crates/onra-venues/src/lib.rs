@@ -6,6 +6,7 @@ mod binance_clock;
 mod binance_spot;
 mod http;
 mod hyperliquid;
+mod hyperliquid_trade;
 mod jupiter;
 mod solana;
 
@@ -18,6 +19,9 @@ use rust_decimal::Decimal;
 pub use binance::{BinanceKey, Restrictions};
 pub use binance_spot::{BinanceSpot, BookTop, SpotFill, SpotOrder, SymbolRules, TimeInForce};
 pub use http::{DEFAULT_SOLANA_RPC, NetConfig};
+pub use hyperliquid_trade::{
+    HyperliquidTrade, PerpAccount, PerpFill, PerpRules, Top as PerpTop, parse_order_status,
+};
 
 pub struct Venues {
     http: reqwest::Client,
@@ -51,6 +55,11 @@ impl Venues {
     /// Spot trading on Binance, or its test network.
     pub fn binance_spot(&self, testnet: bool) -> BinanceSpot {
         BinanceSpot::new(self.http.clone(), testnet)
+    }
+
+    /// Perps trading on Hyperliquid, or its test network.
+    pub fn hyperliquid_trade(&self, testnet: bool) -> HyperliquidTrade {
+        HyperliquidTrade::new(self.http.clone(), testnet)
     }
 
     /// Balances on `venue`, or `None` if no account is linked there.

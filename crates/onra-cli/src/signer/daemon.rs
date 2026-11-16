@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use interprocess::local_socket::tokio::Stream;
 use interprocess::local_socket::traits::tokio::Listener as _;
-use onra_core::{Error, ErrorCode, Result};
+use onra_core::{Error, ErrorCode, Result, VenueId};
 use onra_keystore::SEAL_KEY;
 use onra_keystore::TradingVault;
 use onra_policy::{Decision, Initiator};
@@ -164,19 +164,39 @@ fn locked() -> Error {
 
 /// The Binance key for the plan's network and the seal key, copied out so
 /// no lock is held while talking to the venue.
-fn credentials(state: &Mutex<State>, testnet: bool) -> Result<(BinanceKey, Zeroizing<Vec<u8>>)> {
+/// The key for a venue and network, and the seal key, copied out so no lock
+/// is held while talking to the venue.
+fn credentials(
+    state: &Mutex<State>,
+    venue: VenueId,
+    testnet: bool,
+) -> Result<(exec::Signer, Zeroizing<Vec<u8>>)> {
     let s = state.lock().expect("state lock");
     let u = s.unlocked.as_ref().ok_or_else(locked)?;
-    let name = if testnet { "bn.testnet" } else { "bn" };
-    let key = match u.keys.get(name) {
-        Some(TradingKey::Binance(k)) => BinanceKey { key: k.key.clone(), secret: k.secret.clone() },
-        _ => {
-            let flag = if testnet { " --testnet" } else { "" };
-            return Err(Error::new(ErrorCode::Credentials, format!("no {name} trading key in the vault"))
-                .with_hint(json!({ "cause": "no_trading_key", "venue": "binance", "suggest": format!("onra account trade bn{flag}") })));
-        }
+    let base = if venue == VenueId::Hyperliquid { "hl" } else { "bn" };
+    let name = if testnet { format!("{base}.testnet") } else { base.to_string() };
+    let missing = || {
+        let flag = if testnet { " --testnet" } else { "" };
+        Error::new(ErrorCode::Credentials, format!("no {name} trading key in the vault")).with_hint(
+            json!({ "cause": "no_trading_key", "venue": venue, "suggest": format!("onra account trade {base}{flag}") }),
+        )
     };
-    Ok((key, u.seal.clone()))
+    let signer = match (venue, u.keys.get(&name)) {
+        (VenueId::Binance, Some(TradingKey::Binance(k))) => {
+            exec::Signer::Binance(BinanceKey { key: k.key.clone(), secret: k.secret.clone() })
+        }
+        (VenueId::Hyperliquid, Some(TradingKey::Hyperliquid(k))) => {
+            // The API wallet trades for the linked account; read it fresh.
+            let user = crate::config::load()?.accounts().hyperliquid.clone().ok_or_else(|| {
+                Error::new(ErrorCode::Credentials, "no Hyperliquid account is linked").with_hint(
+                    json!({ "venue": "hyperliquid", "cause": "no_accounts", "suggest": "onra account add hl <address>" }),
+                )
+            })?;
+            exec::Signer::Hyperliquid { key: k.clone(), user }
+        }
+        _ => return Err(missing()),
+    };
+    Ok((signer, u.seal.clone()))
 }
 
 fn denied(verdict: &onra_policy::Verdict) -> Error {
@@ -216,8 +236,8 @@ async fn trade(
 ) -> Result<Value> {
     match request {
         Request::Plan { request, initiator } => {
-            let (key, seal) = credentials(state, request.testnet)?;
-            let plan = exec::plan(&request, initiator, venues, &key, &seal).await?;
+            let (signer, seal) = credentials(state, exec::venue_of(&request), request.testnet)?;
+            let plan = exec::plan(&request, initiator, venues, &signer, &seal).await?;
             if plan.verdict.decision != Decision::Deny {
                 let pending = Pending { plan: plan.clone(), approved: false };
                 state.lock().expect("state lock").plans.insert(plan.id.clone(), pending);
@@ -241,7 +261,7 @@ async fn trade(
             // Only someone with the passphrase can approve.
             vault.seal_key(&passphrase)?;
             let pending = take(state, &plan_id)?;
-            let (_, seal) = credentials(state, pending.plan.testnet)?;
+            let (_, seal) = credentials(state, pending.plan.venue, pending.plan.testnet)?;
             guard::audit_log()?.append(
                 &seal,
                 guard::now_ms(),
@@ -282,14 +302,14 @@ async fn carry_out(
     state: &Mutex<State>,
     venues: &Venues,
 ) -> Result<Value> {
-    let (key, seal) = credentials(state, plan.testnet)?;
+    let (signer, seal) = credentials(state, plan.venue, plan.testnet)?;
     // An approval is a person's decision; otherwise the plan's own origin counts.
     let judged_as = if approved { Initiator::Human } else { plan.initiator };
-    let verdict = exec::judge(&seal, plan.notional_usd, plan.slippage_pct, judged_as)?;
+    let verdict = exec::judge(&seal, &plan, judged_as)?;
     if verdict.decision == Decision::Deny {
         return Err(denied(&verdict));
     }
-    let execution = exec::execute(&plan, initiator, venues, &key, &seal).await?;
+    let execution = exec::execute(&plan, initiator, venues, &signer, &seal).await?;
     Ok(to_value(&execution))
 }
 

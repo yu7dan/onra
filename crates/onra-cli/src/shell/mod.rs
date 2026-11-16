@@ -772,7 +772,13 @@ impl Shell {
             // Trading confirms on a card with its own key handling; the shell
             // gets that in a later step.
             Some(
-                Command::Buy(_) | Command::Sell(_) | Command::Exec { .. } | Command::Approve { .. },
+                Command::Buy(_)
+                | Command::Sell(_)
+                | Command::Long(_)
+                | Command::Short(_)
+                | Command::Close(_)
+                | Command::Exec { .. }
+                | Command::Approve { .. },
             ) => {
                 self.print_error(
                     screen,

@@ -33,6 +33,7 @@ humantime = "2"
 interprocess = { version = "2.4", features = ["tokio"] }
 k256 = { version = "0.14", features = ["ecdsa"] }
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
+rmp-serde = "1.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 rpassword = "7"
 rust_decimal = { version = "1", features = ["serde-with-str"] }

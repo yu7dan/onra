@@ -101,6 +101,7 @@ pub fn error_text(error: &Error) -> String {
             Some("main_wallet") => Some(s.err_main_wallet.to_string()),
             Some("cannot_trade") => Some(s.err_cannot_trade.to_string()),
             Some("locked") => Some(s.err_locked.to_string()),
+            Some("agent_not_approved") => Some(s.err_agent_not_approved.to_string()),
             Some("no_trading_key") => {
                 Some(fill(s.err_no_trading_key, &[("cmd", &hint("suggest").unwrap_or_default())]))
             }
@@ -130,6 +131,9 @@ pub fn error_text(error: &Error) -> String {
                 ("have", &hint("have").unwrap_or_default()),
             ],
         )),
+        ErrorCode::Usage if hint("cause").as_deref() == Some("no_position") => {
+            hint("coin").map(|c| fill(s.err_no_position, &[("coin", &c)]))
+        }
         ErrorCode::Usage if hint("cause").as_deref() == Some("amount_unit") => {
             Some(s.err_amount_unit.to_string())
         }
@@ -326,6 +330,20 @@ pub struct Strings {
     pub err_insufficient: &'static str,
     pub err_amount_unit: &'static str,
     pub err_no_trading_key: &'static str,
+    pub card_long: &'static str,
+    pub notional_about: &'static str,
+    pub card_short: &'static str,
+    pub card_close: &'static str,
+    pub opened_long: &'static str,
+    pub opened_short: &'static str,
+    pub closed: &'static str,
+    pub lbl_leverage: &'static str,
+    pub leverage_line: &'static str,
+    pub lbl_checked: &'static str,
+    pub checked_hl: &'static str,
+    pub reduce_only_line: &'static str,
+    pub err_no_position: &'static str,
+    pub err_agent_not_approved: &'static str,
 
     // errors
     pub err_not_found: &'static str,
@@ -538,6 +556,20 @@ pub const EN: Strings = Strings {
     err_insufficient: "not enough {asset}: {need} needed, {have} available",
     err_amount_unit: "say what the amount is in, e.g. `$100` or `100 USDT`",
     err_no_trading_key: "no Binance trading key for this network; add one with `{cmd}`",
+    card_long: "LONG",
+    notional_about: "worth about {amount}",
+    card_short: "SHORT",
+    card_close: "CLOSE",
+    opened_long: "opened long",
+    opened_short: "opened short",
+    closed: "closed",
+    lbl_leverage: "Leverage",
+    leverage_line: "{lev}x cross · margin ≈ {margin}",
+    lbl_checked: "Checked",
+    checked_hl: "margin, size and price rules",
+    reduce_only_line: "reduce-only: it can only shrink the position",
+    err_no_position: "there is no {coin} position to close",
+    err_agent_not_approved: "this API wallet isn't approved for the account yet: approve it on Hyperliquid (More → API)",
 
     err_not_found: "no venue lists `{query}`",
     err_unknown_venue: "unknown venue `{venue}`",
@@ -749,6 +781,20 @@ pub const ZH: Strings = Strings {
     err_insufficient: "{asset} 余额不足：需要 {need}，可用 {have}",
     err_amount_unit: "请写明数量单位，例如 `$100` 或 `100 USDT`",
     err_no_trading_key: "这个网络还没有币安交易密钥，请用 `{cmd}` 添加",
+    card_long: "做多",
+    notional_about: "名义价值约 {amount}",
+    card_short: "做空",
+    card_close: "平仓",
+    opened_long: "开多",
+    opened_short: "开空",
+    closed: "平仓",
+    lbl_leverage: "杠杆",
+    leverage_line: "{lev}x 全仓 · 保证金约 {margin}",
+    lbl_checked: "检查",
+    checked_hl: "保证金、数量和价格规则",
+    reduce_only_line: "只减仓：只会缩小持仓",
+    err_no_position: "没有 {coin} 持仓可平",
+    err_agent_not_approved: "这个 API 钱包还没有被账户授权：请在 Hyperliquid 的 More → API 里授权",
 
     err_not_found: "没有市场上架 `{query}`",
     err_unknown_venue: "不认识的市场 `{venue}`",

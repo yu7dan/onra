@@ -21,6 +21,8 @@ use crate::{HmacSha256, Initiator, Usage};
 /// An order went out to a venue. These count toward the daily limit and
 /// the rate limit, whether or not they fill.
 pub const SUBMITTED: &str = "submitted";
+/// The venue refused an order; it does not count toward the limits.
+pub const FAILED: &str = "failed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
@@ -150,8 +152,19 @@ impl AuditLog {
     /// the last minute.
     pub fn usage(&self, now_ms: u64) -> Result<Usage> {
         let midnight = now_ms - now_ms % 86_400_000;
+        let entries = self.read()?;
+        // An order the venue refused moved no money.
+        let refused: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter(|e| e.event == FAILED)
+            .filter_map(|e| e.data.get("plan_id").and_then(Value::as_str))
+            .collect();
         let mut usage = Usage::default();
-        for e in self.read()?.iter().filter(|e| e.event == SUBMITTED) {
+        for e in entries.iter().filter(|e| e.event == SUBMITTED) {
+            if e.data.get("plan_id").and_then(Value::as_str).is_some_and(|id| refused.contains(id))
+            {
+                continue;
+            }
             if e.ts >= midnight {
                 let notional = e
                     .data
@@ -193,7 +206,11 @@ mod tests {
         log.append(KEY, now, SUBMITTED, Some(Initiator::Human), json!({ "notional_usd": "80" }))
             .unwrap();
         log.append(KEY, now, SUBMITTED, None, json!({ "notional_usd": "20.5" })).unwrap();
-        assert_eq!(log.verify(KEY).unwrap(), 3);
+        // Refused by the venue: neither the money nor the order counts.
+        log.append(KEY, now, SUBMITTED, None, json!({ "plan_id": "px", "notional_usd": "999" }))
+            .unwrap();
+        log.append(KEY, now, FAILED, None, json!({ "plan_id": "px", "error": "no" })).unwrap();
+        assert_eq!(log.verify(KEY).unwrap(), 5);
         assert!(log.verify(b"another key").is_err());
 
         let usage = log.usage(now + 1_000).unwrap();

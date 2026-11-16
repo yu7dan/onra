@@ -126,16 +126,11 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let venues = Venues::new(&config.net(cli.proxy))?;
             Ok(out.emit(block_on(account::account(action, &mut config, &venues))??))
         }
-        Command::Buy(args) => Ok(out.emit(block_on(trade::trade(
-            onra_core::OrderSide::Buy,
-            args,
-            out.theme().copied(),
-        ))??)),
-        Command::Sell(args) => Ok(out.emit(block_on(trade::trade(
-            onra_core::OrderSide::Sell,
-            args,
-            out.theme().copied(),
-        ))??)),
+        Command::Buy(args) => trade_command(trade::Kind::Buy, args, out),
+        Command::Sell(args) => trade_command(trade::Kind::Sell, args, out),
+        Command::Long(args) => trade_command(trade::Kind::Long, args, out),
+        Command::Short(args) => trade_command(trade::Kind::Short, args, out),
+        Command::Close(args) => trade_command(trade::Kind::Close, args.into(), out),
         Command::Exec { plan_id } => Ok(out.emit(block_on(trade::exec(&plan_id))??)),
         Command::Approve { plan_id } => {
             Ok(out.emit(block_on(trade::approve(&plan_id, out.theme().copied()))??))
@@ -150,6 +145,10 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
         Command::Audit { limit, verify } => Ok(out.emit(block_on(policy::audit(limit, verify))??)),
         Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }
+}
+
+fn trade_command(kind: trade::Kind, args: cli::TradeArgs, out: &Output) -> Result<ExitCode> {
+    Ok(out.emit(block_on(trade::trade(kind, args, out.theme().copied()))??))
 }
 
 fn portfolio(

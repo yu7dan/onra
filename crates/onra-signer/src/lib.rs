@@ -10,6 +10,7 @@
 //! - Solana: an ed25519 keypair signing transactions built by Jupiter.
 
 mod evm;
+pub mod hyperliquid;
 mod solana;
 
 pub use evm::{EvmKey, EvmSignature, checksum, keccak};

@@ -4,7 +4,7 @@ use onra_core::VenueId;
 
 use crate::config::KEYS;
 
-pub const COMMANDS: [&str; 15] = [
+pub const COMMANDS: [&str; 17] = [
     "price",
     "watch",
     "search",
@@ -15,13 +15,15 @@ pub const COMMANDS: [&str; 15] = [
     "positions",
     "orders",
     "account",
+    "unlock",
+    "lock",
     "config",
     "menu",
     "help",
     "clear",
     "exit",
 ];
-const ACCOUNT_ACTIONS: [&str; 4] = ["list", "add", "login", "remove"];
+const ACCOUNT_ACTIONS: [&str; 5] = ["list", "add", "login", "trade", "remove"];
 const CONFIG_ACTIONS: [&str; 4] = ["show", "set", "unset", "path"];
 
 /// Symbols offered before the user has typed anything distinctive. The

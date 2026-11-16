@@ -8,6 +8,7 @@ mod output;
 mod price;
 mod search;
 mod shell;
+mod signer;
 mod watch;
 
 use std::process::ExitCode;
@@ -122,6 +123,9 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             let venues = Venues::new(&config.net(cli.proxy))?;
             Ok(out.emit(block_on(account::account(action, &mut config, &venues))??))
         }
+        Command::Unlock { ttl } => Ok(out.emit(block_on(signer::unlock(ttl))??)),
+        Command::Lock => Ok(out.emit(block_on(signer::lock())??)),
+        Command::Daemon => signer::daemon::run(),
         Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }
 }

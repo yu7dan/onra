@@ -169,11 +169,39 @@ Wallets are linked by address (public, nothing to protect):
 Binance needs an API key. Create one with reading enabled and withdrawals
 disabled; Onra refuses keys that can withdraw. The secret is typed into a
 hidden prompt and kept in the system keychain:
-  onra account login bn")]
+  onra account login bn
+
+Trading keys are separate: sealed in a passphrase-protected vault and only
+ever opened by the signer (see `onra unlock`). Hyperliquid takes an API
+wallet, which can trade but not withdraw:
+  onra account trade hl
+  onra account trade bn --testnet")]
     Account {
         #[command(subcommand)]
         action: AccountAction,
     },
+
+    /// Unlock the signer so trades can be signed. Asks for the vault passphrase.
+    #[command(after_help = "\
+Trading keys stay sealed in the vault until you unlock. The signer then holds
+them in memory, and locks itself (forgetting them) when the time runs out.
+Only a person at the keyboard can unlock; agents cannot.
+
+Examples:
+  onra unlock                  for 15 minutes
+  onra unlock --for 1h")]
+    Unlock {
+        /// How long to stay unlocked, e.g. 30m, 2h (at most 12h).
+        #[arg(long = "for", default_value = "15m", value_name = "DURATION", value_parser = humantime::parse_duration)]
+        ttl: std::time::Duration,
+    },
+
+    /// Lock the signer now: keys are wiped from memory.
+    Lock,
+
+    /// Run the signer in the foreground (started for you by `onra unlock`).
+    #[command(hide = true)]
+    Daemon,
 
     /// Read and write configuration.
     Config {
@@ -192,6 +220,16 @@ pub enum AccountAction {
     Login { venue: String },
     /// Unlink an account and delete its stored secret.
     Remove { venue: String },
+    /// Store a trading key in the vault: `bn`, `hl` (an API wallet) or `sol`.
+    Trade {
+        venue: String,
+        /// The venue's testnet (bn, hl).
+        #[arg(long)]
+        testnet: bool,
+        /// Delete the trading key instead.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

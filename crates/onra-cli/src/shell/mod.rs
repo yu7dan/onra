@@ -748,6 +748,40 @@ impl Shell {
                 );
                 None
             }
+            // Hidden prompts can't run inside the shell's raw mode.
+            Some(Command::Account {
+                action: crate::cli::AccountAction::Trade { venue, testnet, remove: false },
+            }) => {
+                let flag = if testnet { " --testnet" } else { "" };
+                self.print_error(
+                    screen,
+                    &Error::new(ErrorCode::Usage, "adding a trading key needs a regular terminal")
+                        .with_hint(serde_json::json!({ "suggest": format!("onra account trade {venue}{flag}") })),
+                );
+                None
+            }
+            Some(Command::Unlock { .. }) => {
+                self.print_error(
+                    screen,
+                    &Error::new(ErrorCode::Usage, "unlocking needs a regular terminal for now")
+                        .with_hint(serde_json::json!({ "suggest": "onra unlock" })),
+                );
+                None
+            }
+            Some(Command::Daemon) => None,
+            Some(Command::Lock) => {
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move { Done::Outcome(crate::signer::lock().await) }))
+            }
+            // Listing talks to the signer, so it runs on the event loop.
+            Some(Command::Account { action: action @ crate::cli::AccountAction::List }) => {
+                let venues = self.venues.clone();
+                let mut config = self.config.clone();
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move {
+                    Done::Outcome(crate::account::account(action, &mut config, &venues).await)
+                }))
+            }
             Some(Command::Account { action }) => {
                 let venues = self.venues.clone();
                 let mut config = std::mem::take(&mut self.config);

@@ -1,11 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Stable error codes. These are part of the agent contract: never rename a
 /// variant once released, only add new ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     /// Invalid arguments or syntax.
@@ -47,7 +47,7 @@ impl ErrorCode {
 
 /// An error with everything an agent needs to recover: a stable code, a
 /// human-readable message, and an optional machine-readable hint.
-#[derive(Debug, Clone, thiserror::Error, Serialize)]
+#[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]
 #[error("{message}")]
 pub struct Error {
     pub code: ErrorCode,

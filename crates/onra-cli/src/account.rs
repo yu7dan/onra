@@ -25,6 +25,7 @@ use crate::commands::Outcome;
 use crate::config::Config;
 use crate::i18n::{self, fill};
 use crate::price::venue_color;
+use crate::signer;
 
 const BINANCE_ENTRY: &str = "binance";
 const HIDDEN: &str = "••••";
@@ -60,7 +61,7 @@ struct StoredKey {
 
 /// Which venue an account argument means. Solana wallets trade on Jupiter,
 /// so `sol` and `solana` are accepted as well.
-fn account_venue(name: &str) -> Result<VenueId> {
+pub(crate) fn account_venue(name: &str) -> Result<VenueId> {
     match name.to_ascii_lowercase().as_str() {
         "sol" | "solana" => Ok(VenueId::Jupiter),
         other => other.parse(),
@@ -85,7 +86,7 @@ pub fn load(config: &Config) -> Result<Accounts> {
     Ok(Accounts { binance, hyperliquid: linked.hyperliquid.clone(), solana: linked.solana.clone() })
 }
 
-fn short(s: &str) -> String {
+pub(crate) fn short(s: &str) -> String {
     if s.chars().count() <= 12 {
         return s.to_string();
     }
@@ -114,24 +115,34 @@ pub async fn account(
     venues: &Venues,
 ) -> Result<Outcome> {
     match action {
-        AccountAction::List => Ok(list(config)),
+        AccountAction::List => list(config).await,
         AccountAction::Add { venue, address } => add(&venue, &address, config),
         AccountAction::Login { venue } => login(&venue, config, venues).await,
         AccountAction::Remove { venue } => remove(&venue, config),
+        AccountAction::Trade { venue, testnet, remove: true } => {
+            signer::remove_key(&venue, testnet)
+        }
+        AccountAction::Trade { venue, testnet, remove: false } => {
+            signer::add_key(&venue, testnet, config, venues).await
+        }
     }
 }
 
-fn list(config: &Config) -> Outcome {
+async fn list(config: &Config) -> Result<Outcome> {
     let linked = config.accounts().clone();
+    let trading = signer::vault()?.names()?;
+    let signer = signer::status().await.filter(|s| s.unlocked);
     let rows: Vec<(VenueId, Option<String>, &str)> = vec![
         (VenueId::Binance, linked.binance.clone(), "onra account login bn"),
         (VenueId::Hyperliquid, linked.hyperliquid.clone(), "onra account add hl <address>"),
         (VenueId::Jupiter, linked.solana.clone(), "onra account add sol <address>"),
     ];
     let data = json!({
-        "accounts": rows.iter().map(|(v, a, _)| json!({ "venue": v, "linked": a.is_some(), "account": a })).collect::<Vec<_>>()
+        "accounts": rows.iter().map(|(v, a, _)| json!({ "venue": v, "linked": a.is_some(), "account": a })).collect::<Vec<_>>(),
+        "trading_keys": trading,
+        "signer": { "unlocked": signer.is_some(), "expires_in_secs": signer.as_ref().map(|s| s.expires_in_secs) },
     });
-    Outcome::new(data, move |theme| {
+    Ok(Outcome::new(data, move |theme| {
         let s = i18n::s();
         let mut table = Table::new(vec![Align::Left, Align::Left, Align::Left]).indent(2);
         for (venue, account, how) in &rows {
@@ -163,8 +174,21 @@ fn list(config: &Config) -> Outcome {
         let mut lines = vec![String::new()];
         lines.extend(table.render());
         lines.push(String::new());
+        let keys =
+            if trading.is_empty() { s.trade_keys_none.to_string() } else { trading.join(" · ") };
+        lines.push(format!("  {}  {}", theme.dim(&onra_ui::text::pad(s.trade_keys, 14)), keys));
+        let state = match &signer {
+            Some(st) => format!(
+                "{} {}",
+                theme.brand("●"),
+                fill(s.signer_unlocked, &[("ttl", &signer::minutes(st.expires_in_secs))])
+            ),
+            None => format!("{} {}", theme.faint("○"), theme.faint(s.signer_locked)),
+        };
+        lines.push(format!("  {}  {state}", theme.dim(&onra_ui::text::pad(s.signer, 14))));
+        lines.push(String::new());
         lines
-    })
+    }))
 }
 
 fn add(venue: &str, address: &str, config: &mut Config) -> Result<Outcome> {
@@ -197,7 +221,7 @@ fn add(venue: &str, address: &str, config: &mut Config) -> Result<Outcome> {
     }))
 }
 
-fn read_line(prompt: &str) -> Result<String> {
+pub(crate) fn read_line(prompt: &str) -> Result<String> {
     print!("{prompt}");
     let _ = std::io::stdout().flush();
     let mut line = String::new();

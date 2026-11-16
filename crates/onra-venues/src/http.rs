@@ -6,17 +6,25 @@ use reqwest::{Client, Proxy};
 use rust_decimal::Decimal;
 use serde_json::json;
 
+pub const DEFAULT_SOLANA_RPC: &str = "https://api.mainnet-beta.solana.com";
+
 #[derive(Debug, Clone)]
 pub struct NetConfig {
     /// Explicit proxy URL (`http://`, `https://` or `socks5://`). When unset,
     /// the standard `HTTPS_PROXY` / `ALL_PROXY` environment variables apply.
     pub proxy: Option<String>,
     pub timeout: Duration,
+    /// Solana JSON-RPC endpoint for reading wallets.
+    pub solana_rpc: String,
 }
 
 impl Default for NetConfig {
     fn default() -> Self {
-        Self { proxy: None, timeout: Duration::from_secs(10) }
+        Self {
+            proxy: None,
+            timeout: Duration::from_secs(10),
+            solana_rpc: DEFAULT_SOLANA_RPC.into(),
+        }
     }
 }
 

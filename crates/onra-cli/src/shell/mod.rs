@@ -37,7 +37,7 @@ use crate::watch::{self, Update, Watch};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PING_EVERY: Duration = Duration::from_secs(60);
 /// Menu entries that work today; the rest show as "coming soon".
-const MENU_READY: [bool; 7] = [true, true, true, false, false, true, true];
+const MENU_READY: [bool; 7] = [true, true, true, true, false, true, true];
 
 /// What a finished background task produced.
 enum Done {
@@ -47,6 +47,16 @@ enum Done {
 
 type Task = Pin<Box<dyn Future<Output = Done>>>;
 type Polling = Pin<Box<dyn Future<Output = Vec<Update>>>>;
+type TotalTask = Pin<Box<dyn Future<Output = Result<crate::account::Portfolio>>>>;
+
+/// The home screen's account total, fetched in the background.
+enum Total {
+    /// No accounts linked: the line isn't shown.
+    Unlinked,
+    Loading,
+    Known(Option<rust_decimal::Decimal>),
+    Failed,
+}
 
 /// What the asset picker leads to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -89,6 +99,11 @@ struct Shell {
     note: Option<String>,
     health: Vec<(VenueId, Health)>,
     last_ping: Instant,
+    accounts: Rc<onra_venues::Accounts>,
+    total: Total,
+    /// The total is masked until asked for (screenshots, screen sharing).
+    show_total: bool,
+    refresh_total: bool,
     quit: bool,
 }
 
@@ -115,7 +130,11 @@ pub fn run(config: Config, proxy: Option<String>, theme: Theme) -> Result<ExitCo
         .map_err(|e| Error::new(ErrorCode::Internal, format!("cannot enter raw mode: {e}")))?;
     let _raw = RawMode;
 
-    let shell = Shell::new(config, proxy, theme, venues, i18n::lang(), Editor::with_history());
+    // Credentials load before raw mode, so a keystore passphrase prompt (only
+    // needed without a system keychain) works normally.
+    let accounts = Rc::new(load_accounts(&config));
+    let mut shell = Shell::new(config, proxy, theme, venues, i18n::lang(), Editor::with_history());
+    shell.set_accounts(accounts);
     runtime.block_on(shell.event_loop());
     Ok(ExitCode::SUCCESS)
 }
@@ -145,8 +164,48 @@ impl Shell {
             note: None,
             health: VenueId::ALL.into_iter().map(|v| (v, Health::Checking)).collect(),
             last_ping: Instant::now(),
+            accounts: Rc::new(onra_venues::Accounts::default()),
+            total: Total::Unlinked,
+            show_total: false,
+            refresh_total: false,
             quit: false,
         }
+    }
+
+    fn set_accounts(&mut self, accounts: Rc<onra_venues::Accounts>) {
+        let linked = accounts.binance.is_some()
+            || accounts.hyperliquid.is_some()
+            || accounts.solana.is_some();
+        self.accounts = accounts;
+        self.total = if linked { Total::Loading } else { Total::Unlinked };
+        self.refresh_total = linked;
+    }
+
+    fn fetch_total(&mut self) -> Option<TotalTask> {
+        if matches!(self.total, Total::Unlinked) {
+            return None;
+        }
+        self.refresh_total = false;
+        let venues = self.venues.clone();
+        let accounts = self.accounts.clone();
+        let parts = crate::account::Parts { balances: true, positions: false, orders: false };
+        Some(Box::pin(async move { crate::account::fetch(&venues, &accounts, parts).await }))
+    }
+
+    fn total_line(&self) -> Option<String> {
+        let t = &self.theme;
+        let value = match &self.total {
+            Total::Unlinked => return None,
+            Total::Loading => t.faint("…"),
+            Total::Failed => t.faint("—"),
+            Total::Known(None) => t.faint("—"),
+            Total::Known(Some(v)) if self.show_total => {
+                t.strong(&format!("${}", onra_ui::format::price(*v, 2)))
+            }
+            Total::Known(Some(_)) => t.strong("••••••"),
+        };
+        let hint = if self.show_total { self.s.hide_total } else { self.s.show_total };
+        Some(format!("  {}   {value}   {}", t.faint(self.s.total), t.faint(hint)))
     }
 
     async fn event_loop(mut self) {
@@ -157,6 +216,7 @@ impl Shell {
         let mut task: Option<Task> = None;
         let mut polling: Option<Polling> = None;
         let mut pings = self.ping_all();
+        let mut total_task: Option<TotalTask> = self.fetch_total();
         screen.draw(&self.frame());
 
         loop {
@@ -182,6 +242,17 @@ impl Shell {
                     if self.quit {
                         break;
                     }
+                    if self.refresh_total && total_task.is_none() {
+                        total_task = self.fetch_total();
+                    }
+                    screen.draw(&self.frame());
+                }
+                result = async { total_task.as_mut().expect("guarded by condition").await }, if total_task.is_some() => {
+                    total_task = None;
+                    self.total = match result {
+                        Ok(p) => Total::Known(p.total_usd),
+                        Err(_) => Total::Failed,
+                    };
                     screen.draw(&self.frame());
                 }
                 Some(event) = rx.recv() => {
@@ -221,6 +292,9 @@ impl Shell {
                     }
                     if pings.is_empty() && self.last_ping.elapsed() >= PING_EVERY {
                         pings = self.ping_all();
+                        if total_task.is_none() {
+                            total_task = self.fetch_total();
+                        }
                     }
                 }
             }
@@ -261,6 +335,11 @@ impl Shell {
     ) -> Option<Task> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         self.note = None;
+
+        if ctrl && key.code == KeyCode::Char('o') {
+            self.show_total = !self.show_total;
+            return None;
+        }
 
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
             match self.mode {
@@ -328,6 +407,7 @@ impl Shell {
                 self.mode = Mode::PickAsset;
                 None
             }
+            3 => self.run_line("portfolio", screen, tx),
             2 => {
                 self.editor.set("search ");
                 self.mode = Mode::Input;
@@ -604,6 +684,75 @@ impl Shell {
                     async move { Done::Outcome(commands::search(&venues, &query).await) },
                 ))
             }
+            Some(
+                cmd @ (Command::Balance { .. }
+                | Command::Positions { .. }
+                | Command::Orders { .. }
+                | Command::Portfolio { .. }),
+            ) => {
+                let (parts, all, hide) = match cmd {
+                    Command::Balance { all, hide } => (
+                        crate::account::Parts { balances: true, positions: false, orders: false },
+                        all,
+                        hide,
+                    ),
+                    Command::Positions { hide } => (
+                        crate::account::Parts { balances: false, positions: true, orders: false },
+                        false,
+                        hide,
+                    ),
+                    Command::Orders { hide } => (
+                        crate::account::Parts { balances: false, positions: false, orders: true },
+                        false,
+                        hide,
+                    ),
+                    Command::Portfolio { all, hide } => (
+                        crate::account::Parts { balances: true, positions: true, orders: true },
+                        all,
+                        hide,
+                    ),
+                    _ => unreachable!("matched above"),
+                };
+                let venues = self.venues.clone();
+                // Loading accounts may prompt for a keystore passphrase, which
+                // can't happen inside the shell's raw mode; the keychain case
+                // never prompts.
+                let config = self.config.clone();
+                self.mode = Mode::Busy { started: Instant::now(), loader: Loader::default(), json };
+                Some(Box::pin(async move {
+                    Done::Outcome(commands::portfolio(&venues, &config, parts, all, hide).await)
+                }))
+            }
+            Some(Command::Account { action: crate::cli::AccountAction::Login { .. } }) => {
+                self.print_error(
+                    screen,
+                    &Error::new(
+                        ErrorCode::Usage,
+                        "linking an exchange key needs a regular terminal",
+                    )
+                    .with_hint(serde_json::json!({ "suggest": "onra account login bn" })),
+                );
+                None
+            }
+            Some(Command::Account { action }) => {
+                let venues = self.venues.clone();
+                let mut config = std::mem::take(&mut self.config);
+                let result = futures::executor::block_on(crate::account::account(
+                    action,
+                    &mut config,
+                    &venues,
+                ));
+                self.config = config;
+                self.set_accounts(Rc::new(load_accounts(&self.config)));
+                match result {
+                    Ok(outcome) => {
+                        let lines = self.outcome_lines(outcome, json);
+                        self.print(screen, &lines);
+                    }
+                    Err(e) => self.print_error(screen, &e),
+                }
+                None
+            }
             Some(Command::Watch { markets, interval, .. }) => {
                 let venues = self.venues.clone();
                 let tx = tx.clone();
@@ -720,7 +869,11 @@ impl Shell {
         let term = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
         let inner = term.saturating_sub(6).clamp(36, 96);
 
-        let mut lines = vec![String::new(), self.status_line(inner + 2), String::new()];
+        let mut lines = vec![String::new(), self.status_line(inner + 2)];
+        if let Some(total) = self.total_line() {
+            lines.push(total);
+        }
+        lines.push(String::new());
         let body = self.body();
         if !body.is_empty() {
             lines.extend(body);
@@ -892,6 +1045,16 @@ impl Shell {
     }
 }
 
+/// Linked accounts for the shell. If the Binance secret can't be read, the
+/// wallets still work and the total covers what can be reached.
+fn load_accounts(config: &Config) -> onra_venues::Accounts {
+    crate::account::load(config).unwrap_or_else(|_| onra_venues::Accounts {
+        binance: None,
+        hyperliquid: config.accounts().hyperliquid.clone(),
+        solana: config.accounts().solana.clone(),
+    })
+}
+
 /// Whether `onra` without arguments should open the shell rather than print
 /// version info: only for a person at a terminal.
 pub fn wanted(theme: Option<&Theme>) -> bool {
@@ -924,6 +1087,11 @@ mod tests {
         frames.push(("menu", sh.frame()));
         sh.set_health(VenueId::Jupiter, Health::Up(Duration::from_millis(180)));
         frames.push(("menu-online", sh.frame()));
+        sh.total = Total::Known(Some(rust_decimal::Decimal::new(1_234_567, 2)));
+        frames.push(("menu-total", sh.frame()));
+        sh.show_total = true;
+        frames.push(("menu-total-shown", sh.frame()));
+        sh.show_total = false;
 
         sh.mode = Mode::Input;
         sh.editor.set("pri");

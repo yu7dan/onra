@@ -9,33 +9,61 @@ use onra_core::{Error, ErrorCode, Result};
 use onra_ui::Convention;
 
 use crate::i18n::Lang;
-use onra_venues::NetConfig;
+use onra_venues::{DEFAULT_SOLANA_RPC, NetConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const KEYS: [&str; 4] =
-    ["network.proxy", "network.timeout_ms", "ui.color_convention", "ui.language"];
+pub const KEYS: [&str; 5] = [
+    "network.proxy",
+    "network.timeout_ms",
+    "network.solana_rpc",
+    "ui.color_convention",
+    "ui.language",
+];
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     #[serde(skip_serializing_if = "Network::is_empty")]
     network: Network,
     #[serde(skip_serializing_if = "Ui::is_empty")]
     ui: Ui,
+    #[serde(skip_serializing_if = "LinkedAccounts::is_empty")]
+    accounts: LinkedAccounts,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// Linked accounts. Only public data lives here: addresses, and a masked
+/// Binance key marking that its secret is in the keystore.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LinkedAccounts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hyperliquid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solana: Option<String>,
+}
+
+impl LinkedAccounts {
+    pub fn is_empty(&self) -> bool {
+        self.binance.is_none() && self.hyperliquid.is_none() && self.solana.is_none()
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Network {
     #[serde(skip_serializing_if = "Option::is_none")]
     proxy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    solana_rpc: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Ui {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,7 +75,7 @@ struct Ui {
 
 impl Network {
     fn is_empty(&self) -> bool {
-        self.proxy.is_none() && self.timeout_ms.is_none()
+        self.proxy.is_none() && self.timeout_ms.is_none() && self.solana_rpc.is_none()
     }
 }
 
@@ -112,6 +140,12 @@ impl Config {
         };
         match key {
             "network.proxy" => self.network.proxy = Some(value.to_string()),
+            "network.solana_rpc" => {
+                if !value.starts_with("http://") && !value.starts_with("https://") {
+                    return Err(invalid("an http(s) URL"));
+                }
+                self.network.solana_rpc = Some(value.to_string());
+            }
             "network.timeout_ms" => {
                 let ms = value
                     .parse()
@@ -141,6 +175,7 @@ impl Config {
         match key {
             "network.proxy" => self.network.proxy = None,
             "network.timeout_ms" => self.network.timeout_ms = None,
+            "network.solana_rpc" => self.network.solana_rpc = None,
             "ui.color_convention" => self.ui.color_convention = None,
             "ui.language" => self.ui.language = None,
             _ => return Err(unknown_key(key)),
@@ -165,6 +200,14 @@ impl Config {
         }
     }
 
+    pub fn accounts(&self) -> &LinkedAccounts {
+        &self.accounts
+    }
+
+    pub fn accounts_mut(&mut self) -> &mut LinkedAccounts {
+        &mut self.accounts
+    }
+
     /// Interface language: `ONRA_LANG`, then `ui.language`, then the system.
     pub fn language(&self) -> Lang {
         env::var("ONRA_LANG")
@@ -181,7 +224,9 @@ impl Config {
             .or_else(|| env::var("ONRA_PROXY").ok().filter(|p| !p.is_empty()))
             .or_else(|| self.network.proxy.clone());
         let ms = self.network.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
-        NetConfig { proxy, timeout: Duration::from_millis(ms) }
+        let solana_rpc =
+            self.network.solana_rpc.clone().unwrap_or_else(|| DEFAULT_SOLANA_RPC.to_string());
+        NetConfig { proxy, timeout: Duration::from_millis(ms), solana_rpc }
     }
 
     /// Every key with its effective value, for `config show`.
@@ -196,6 +241,11 @@ impl Config {
                 "network.timeout_ms",
                 json!(self.network.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS)),
                 self.network.timeout_ms.is_none(),
+            ),
+            (
+                "network.solana_rpc",
+                json!(self.network.solana_rpc.as_deref().unwrap_or(DEFAULT_SOLANA_RPC)),
+                self.network.solana_rpc.is_none(),
             ),
             ("ui.color_convention", json!(convention), self.ui.color_convention.is_none()),
             (

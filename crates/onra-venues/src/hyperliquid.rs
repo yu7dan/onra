@@ -1,14 +1,15 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use onra_core::{Market, MarketKind, MarketQuery, Result, SearchHit, Ticker, VenueId};
+use onra_core::{
+    Balance, Market, MarketKind, MarketQuery, Order, OrderSide, Position, PositionSide, Result,
+    SearchHit, Ticker, VenueId,
+};
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use tokio::sync::Mutex;
 
 use crate::http::{decimal, pct_change, status_error, transport_error, unexpected};
@@ -215,5 +216,246 @@ impl Hyperliquid {
             day.low = Some(day.low.map_or(l, |x| x.min(l)));
         }
         Ok(day)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Accounts. Reading needs only the address; nothing here can move funds.
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Clearinghouse {
+    margin_summary: MarginSummary,
+    withdrawable: String,
+    asset_positions: Vec<AssetPosition>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarginSummary {
+    account_value: String,
+}
+
+#[derive(Deserialize)]
+struct AssetPosition {
+    position: PerpPosition,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PerpPosition {
+    coin: String,
+    szi: String,
+    leverage: Leverage,
+    entry_px: String,
+    position_value: String,
+    unrealized_pnl: String,
+    liquidation_px: Option<String>,
+    margin_used: String,
+}
+
+#[derive(Deserialize)]
+struct Leverage {
+    value: u32,
+}
+
+#[derive(Deserialize)]
+struct SpotMeta {
+    tokens: Vec<SpotToken>,
+    universe: Vec<SpotPair>,
+}
+
+#[derive(Deserialize)]
+struct SpotToken {
+    name: String,
+    index: usize,
+}
+
+#[derive(Deserialize)]
+struct SpotPair {
+    name: String,
+    tokens: [usize; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotCtx {
+    coin: String,
+    mark_px: String,
+    mid_px: Option<String>,
+    day_ntl_vlm: String,
+}
+
+#[derive(Deserialize)]
+struct SpotState {
+    balances: Vec<SpotBalance>,
+}
+
+#[derive(Deserialize)]
+struct SpotBalance {
+    coin: String,
+    total: String,
+    hold: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenOrder {
+    coin: String,
+    side: String,
+    limit_px: String,
+    sz: String,
+    orig_sz: String,
+    oid: u64,
+    timestamp: u64,
+    order_type: String,
+    is_trigger: bool,
+    trigger_px: String,
+}
+
+/// Perp coins trade as `ETH-PERP`; spot pairs (`PURR/USDC`, `@107`) keep
+/// Hyperliquid's own name.
+fn order_symbol(coin: &str) -> String {
+    if coin.contains('/') || coin.starts_with('@') {
+        coin.to_string()
+    } else {
+        format!("{coin}-PERP")
+    }
+}
+
+impl Hyperliquid {
+    /// USD price per spot token, from its most traded USDC pair.
+    async fn spot_prices(&self) -> Result<HashMap<String, Decimal>> {
+        const USDC: usize = 0;
+        let (meta, ctxs): (SpotMeta, Vec<SpotCtx>) =
+            self.info(json!({ "type": "spotMetaAndAssetCtxs" })).await?;
+        let names: HashMap<usize, &str> =
+            meta.tokens.iter().map(|t| (t.index, t.name.as_str())).collect();
+        let ctx_by_coin: HashMap<&str, &SpotCtx> =
+            ctxs.iter().map(|c| (c.coin.as_str(), c)).collect();
+        let mut best: HashMap<String, (Decimal, Decimal)> = HashMap::new();
+        for pair in &meta.universe {
+            let [base, quote] = pair.tokens;
+            let (Some(ctx), Some(name)) = (ctx_by_coin.get(pair.name.as_str()), names.get(&base))
+            else {
+                continue;
+            };
+            if quote != USDC {
+                continue;
+            }
+            let (Ok(price), Ok(volume)) = (
+                decimal(VENUE, ctx.mid_px.as_deref().unwrap_or(&ctx.mark_px)),
+                decimal(VENUE, &ctx.day_ntl_vlm),
+            ) else {
+                continue;
+            };
+            let entry = best.entry(name.to_string()).or_insert((price, volume));
+            if volume > entry.1 {
+                *entry = (price, volume);
+            }
+        }
+        let mut prices: HashMap<String, Decimal> =
+            best.into_iter().map(|(k, (p, _))| (k, p)).collect();
+        prices.insert("USDC".into(), Decimal::ONE);
+        Ok(prices)
+    }
+
+    pub async fn balances(&self, address: &str) -> Result<Vec<Balance>> {
+        let (perps, spot, prices): (Clearinghouse, SpotState, _) = tokio::try_join!(
+            self.info(json!({ "type": "clearinghouseState", "user": address })),
+            self.info(json!({ "type": "spotClearinghouseState", "user": address })),
+            async { Ok(self.spot_prices().await.unwrap_or_default()) },
+        )?;
+        let mut out = Vec::new();
+        let margin = decimal(VENUE, &perps.margin_summary.account_value)?;
+        if !margin.is_zero() {
+            out.push(Balance {
+                venue: VENUE,
+                asset: "USDC".into(),
+                wallet: Some("perps".into()),
+                total: margin,
+                available: decimal(VENUE, &perps.withdrawable)?,
+                usd_value: Some(margin),
+                mint: None,
+                verified: true,
+            });
+        }
+        for b in spot.balances {
+            let total = decimal(VENUE, &b.total)?;
+            if total.is_zero() {
+                continue;
+            }
+            let hold = decimal(VENUE, &b.hold)?;
+            let usd_value = prices.get(&b.coin).map(|p| (total * p).round_dp(2));
+            out.push(Balance {
+                venue: VENUE,
+                asset: b.coin,
+                wallet: Some("spot".into()),
+                total,
+                available: total - hold,
+                usd_value,
+                mint: None,
+                verified: true,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn positions(&self, address: &str) -> Result<Vec<Position>> {
+        let state: Clearinghouse =
+            self.info(json!({ "type": "clearinghouseState", "user": address })).await?;
+        state
+            .asset_positions
+            .into_iter()
+            .map(|ap| {
+                let p = ap.position;
+                let szi = decimal(VENUE, &p.szi)?;
+                let size = szi.abs();
+                let value = decimal(VENUE, &p.position_value)?;
+                Ok(Position {
+                    venue: VENUE,
+                    symbol: format!("{}-PERP", p.coin),
+                    side: if szi.is_sign_negative() {
+                        PositionSide::Short
+                    } else {
+                        PositionSide::Long
+                    },
+                    size,
+                    entry_price: decimal(VENUE, &p.entry_px)?,
+                    mark_price: (!size.is_zero()).then(|| (value / size).round_dp(8).normalize()),
+                    unrealized_pnl: decimal(VENUE, &p.unrealized_pnl)?,
+                    leverage: Some(Decimal::from(p.leverage.value)),
+                    liquidation_price: p
+                        .liquidation_px
+                        .as_deref()
+                        .map(|l| decimal(VENUE, l))
+                        .transpose()?,
+                    margin: Some(decimal(VENUE, &p.margin_used)?),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn orders(&self, address: &str) -> Result<Vec<Order>> {
+        let orders: Vec<OpenOrder> =
+            self.info(json!({ "type": "frontendOpenOrders", "user": address })).await?;
+        orders
+            .into_iter()
+            .map(|o| {
+                let size = decimal(VENUE, &o.sz)?;
+                let price = if o.is_trigger { &o.trigger_px } else { &o.limit_px };
+                Ok(Order {
+                    venue: VENUE,
+                    id: o.oid.to_string(),
+                    symbol: order_symbol(&o.coin),
+                    side: if o.side == "B" { OrderSide::Buy } else { OrderSide::Sell },
+                    kind: o.order_type.to_ascii_lowercase(),
+                    price: Some(decimal(VENUE, price)?),
+                    size,
+                    filled: (decimal(VENUE, &o.orig_sz)? - size).max(Decimal::ZERO),
+                    created_ms: o.timestamp,
+                })
+            })
+            .collect()
     }
 }

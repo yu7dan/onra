@@ -5,16 +5,30 @@ mod binance;
 mod http;
 mod hyperliquid;
 mod jupiter;
+mod solana;
 
-use onra_core::{Market, MarketQuery, Result, SearchHit, Ticker, VenueId};
+use onra_core::{
+    Balance, Market, MarketQuery, Order, Position, Result, SearchHit, Ticker, VenueId,
+};
 use rust_decimal::Decimal;
 
-pub use http::NetConfig;
+pub use binance::{BinanceKey, Restrictions};
+pub use http::{DEFAULT_SOLANA_RPC, NetConfig};
 
 pub struct Venues {
     binance: binance::Binance,
     hyperliquid: hyperliquid::Hyperliquid,
     jupiter: jupiter::Jupiter,
+    solana: solana::Solana,
+}
+
+/// The accounts a person has linked. Addresses are public; only the
+/// Binance key carries a secret.
+#[derive(Default)]
+pub struct Accounts {
+    pub binance: Option<BinanceKey>,
+    pub hyperliquid: Option<String>,
+    pub solana: Option<String>,
 }
 
 impl Venues {
@@ -23,8 +37,91 @@ impl Venues {
         Ok(Self {
             binance: binance::Binance::new(client.clone()),
             hyperliquid: hyperliquid::Hyperliquid::new(client.clone()),
-            jupiter: jupiter::Jupiter::new(client),
+            jupiter: jupiter::Jupiter::new(client.clone()),
+            solana: solana::Solana::new(client, net.solana_rpc.clone()),
         })
+    }
+
+    /// Balances on `venue`, or `None` if no account is linked there.
+    pub async fn balances(
+        &self,
+        venue: VenueId,
+        accounts: &Accounts,
+    ) -> Option<Result<Vec<Balance>>> {
+        Some(match venue {
+            VenueId::Binance => self.binance.balances(accounts.binance.as_ref()?).await,
+            VenueId::Hyperliquid => self.hyperliquid.balances(accounts.hyperliquid.as_ref()?).await,
+            VenueId::Jupiter => self.solana_balances(accounts.solana.as_ref()?).await,
+        })
+    }
+
+    /// Open perp positions; only Hyperliquid has them today.
+    pub async fn positions(
+        &self,
+        venue: VenueId,
+        accounts: &Accounts,
+    ) -> Option<Result<Vec<Position>>> {
+        match venue {
+            VenueId::Hyperliquid => {
+                Some(self.hyperliquid.positions(accounts.hyperliquid.as_ref()?).await)
+            }
+            VenueId::Binance | VenueId::Jupiter => None,
+        }
+    }
+
+    /// Resting orders. Jupiter swaps execute at once, so it has none.
+    pub async fn orders(&self, venue: VenueId, accounts: &Accounts) -> Option<Result<Vec<Order>>> {
+        match venue {
+            VenueId::Binance => Some(self.binance.orders(accounts.binance.as_ref()?).await),
+            VenueId::Hyperliquid => {
+                Some(self.hyperliquid.orders(accounts.hyperliquid.as_ref()?).await)
+            }
+            VenueId::Jupiter => None,
+        }
+    }
+
+    /// What a Binance key may do. Used to refuse keys that can withdraw.
+    pub async fn binance_restrictions(&self, key: &BinanceKey) -> Result<Restrictions> {
+        self.binance.restrictions(key).await
+    }
+
+    async fn solana_balances(&self, owner: &str) -> Result<Vec<Balance>> {
+        let holdings = self.solana.holdings(owner).await?;
+        // SOL first, so it is resolved even if later batches are throttled.
+        let mut mints: Vec<String> =
+            holdings.keys().filter(|m| *m != solana::SOL_MINT).cloned().collect();
+        mints.insert(0, solana::SOL_MINT.to_string());
+        // Without metadata the balances are still true, just unnamed.
+        let mut meta = self.jupiter.tokens(&mints).await.unwrap_or_default();
+        // Native SOL never depends on a lookup succeeding.
+        if !meta.contains_key(solana::SOL_MINT) {
+            let price = self.jupiter.quote(solana::SOL_MINT).await.ok();
+            meta.insert(
+                solana::SOL_MINT.to_string(),
+                jupiter::TokenMeta { symbol: "SOL".into(), verified: true, usd_price: price },
+            );
+        }
+        Ok(holdings
+            .into_iter()
+            .map(|(mint, amount)| {
+                let info = meta.get(&mint);
+                let short = format!(
+                    "{}…{}",
+                    &mint[..4.min(mint.len())],
+                    &mint[mint.len().saturating_sub(4)..]
+                );
+                Balance {
+                    venue: VenueId::Jupiter,
+                    asset: info.map_or(short, |m| m.symbol.clone()),
+                    wallet: Some("solana".into()),
+                    total: amount,
+                    available: amount,
+                    usd_value: info.and_then(|m| m.usd_price).map(|p| (amount * p).round_dp(2)),
+                    mint: Some(mint),
+                    verified: info.is_some_and(|m| m.verified),
+                }
+            })
+            .collect())
     }
 
     /// Latest price of an already-resolved market. Much lighter than

@@ -30,6 +30,30 @@ pub fn price(value: Decimal, dp: u32) -> String {
     group_thousands(&s)
 }
 
+/// A quantity at its own precision, grouped: `1,576,044`, `753.38`,
+/// `0.0006099`. Never padded with zeros; at most 8 decimals.
+pub fn quantity(value: Decimal) -> String {
+    let v = value.round_dp(8).normalize();
+    group_thousands(&v.to_string())
+}
+
+/// A quantity of an asset worth `price` each, with just enough decimals that
+/// the last digit is worth about a cent: `2,246,889.65` USDC,
+/// `0.0123457` BTC, `188,039,968` of a token priced in millionths.
+pub fn quantity_at(value: Decimal, price: Decimal) -> String {
+    if price <= Decimal::ZERO {
+        return quantity(value);
+    }
+    let mut dp: u32 = 0;
+    let mut unit_value = price;
+    while unit_value > Decimal::new(1, 2) && dp < 8 {
+        unit_value /= Decimal::TEN;
+        dp += 1;
+    }
+    let v = value.round_dp(dp).normalize();
+    group_thousands(&v.to_string())
+}
+
 /// `+2.03%` / `−0.41%`, with a true minus sign (U+2212) so it matches the
 /// plus in width and weight. The explicit sign keeps the column aligned.
 pub fn percent(value: Decimal) -> String {
@@ -114,6 +138,20 @@ mod tests {
         assert_eq!(percent(d("2.031")), "+2.03%");
         assert_eq!(percent(d("-2.031")), "−2.03%");
         assert_eq!(percent(d("-0.001")), "+0.00%");
+    }
+
+    #[test]
+    fn formats_quantities() {
+        assert_eq!(quantity(d("1576044.00")), "1,576,044");
+        assert_eq!(quantity(d("753.3800")), "753.38");
+        assert_eq!(quantity(d("0.000609912345")), "0.00060991");
+    }
+
+    #[test]
+    fn sizes_quantities_by_value() {
+        assert_eq!(quantity_at(d("2246889.652284"), d("1")), "2,246,889.65");
+        assert_eq!(quantity_at(d("0.01234567891"), d("65000")), "0.0123457");
+        assert_eq!(quantity_at(d("188039967.97158599"), d("0.0000001")), "188,039,968");
     }
 
     #[test]

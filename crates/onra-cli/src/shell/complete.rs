@@ -4,8 +4,22 @@ use onra_core::VenueId;
 
 use crate::config::KEYS;
 
-pub const COMMANDS: [&str; 8] =
-    ["price", "watch", "search", "config", "menu", "help", "clear", "exit"];
+pub const COMMANDS: [&str; 13] = [
+    "price",
+    "watch",
+    "search",
+    "portfolio",
+    "balance",
+    "positions",
+    "orders",
+    "account",
+    "config",
+    "menu",
+    "help",
+    "clear",
+    "exit",
+];
+const ACCOUNT_ACTIONS: [&str; 4] = ["list", "add", "login", "remove"];
 const CONFIG_ACTIONS: [&str; 4] = ["show", "set", "unset", "path"];
 
 /// Symbols offered before the user has typed anything distinctive. The
@@ -29,6 +43,9 @@ pub fn complete(line: &str) -> Vec<String> {
     let options: Vec<String> = match done {
         [] => COMMANDS.iter().map(|s| s.to_string()).collect(),
         ["config"] => CONFIG_ACTIONS.iter().map(|s| s.to_string()).collect(),
+        ["account"] => ACCOUNT_ACTIONS.iter().map(|s| s.to_string()).collect(),
+        ["account", "add" | "remove"] => vec!["hl".into(), "sol".into(), "bn".into()],
+        ["account", "login"] => vec!["bn".into()],
         ["config", "set" | "unset"] => KEYS.iter().map(|s| s.to_string()).collect(),
         ["config", "set", "ui.color_convention"] => vec!["east".into(), "west".into()],
         ["config", "set", "ui.language"] => vec!["auto".into(), "en".into(), "zh".into()],

@@ -1,3 +1,4 @@
+mod account;
 mod cli;
 mod commands;
 mod config;
@@ -92,8 +93,40 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Command::Balance { all, hide } => {
+            let parts = account::Parts { balances: true, positions: false, orders: false };
+            portfolio(&config, cli.proxy, parts, all, hide, out)
+        }
+        Command::Positions { hide } => {
+            let parts = account::Parts { balances: false, positions: true, orders: false };
+            portfolio(&config, cli.proxy, parts, false, hide, out)
+        }
+        Command::Orders { hide } => {
+            let parts = account::Parts { balances: false, positions: false, orders: true };
+            portfolio(&config, cli.proxy, parts, false, hide, out)
+        }
+        Command::Portfolio { all, hide } => {
+            let parts = account::Parts { balances: true, positions: true, orders: true };
+            portfolio(&config, cli.proxy, parts, all, hide, out)
+        }
+        Command::Account { action } => {
+            let venues = Venues::new(&config.net(cli.proxy))?;
+            Ok(out.emit(block_on(account::account(action, &mut config, &venues))??))
+        }
         Command::Config { action } => Ok(out.emit(commands::config(action, &mut config)?)),
     }
+}
+
+fn portfolio(
+    config: &config::Config,
+    proxy: Option<String>,
+    parts: account::Parts,
+    all: bool,
+    hide: bool,
+    out: &Output,
+) -> Result<ExitCode> {
+    let venues = Venues::new(&config.net(proxy))?;
+    Ok(out.emit(block_on(commands::portfolio(&venues, config, parts, all, hide))??))
 }
 
 /// Network commands run on a single-threaded runtime: the work is I/O-bound

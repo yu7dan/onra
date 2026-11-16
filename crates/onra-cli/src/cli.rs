@@ -93,11 +93,73 @@ Examples:
         count: Option<u64>,
     },
 
+    /// Balances across linked accounts, with a USD total.
+    #[command(after_help = "Small (< $1) and unverified tokens are hidden; --all shows them.")]
+    Balance {
+        /// Include small and unverified balances.
+        #[arg(long)]
+        all: bool,
+        /// Mask amounts, e.g. for screenshots.
+        #[arg(long)]
+        hide: bool,
+    },
+
+    /// Open perp positions.
+    Positions {
+        /// Mask sizes and PnL.
+        #[arg(long)]
+        hide: bool,
+    },
+
+    /// Resting orders.
+    Orders {
+        /// Mask sizes.
+        #[arg(long)]
+        hide: bool,
+    },
+
+    /// Balances, positions and open orders together.
+    Portfolio {
+        /// Include small and unverified balances.
+        #[arg(long)]
+        all: bool,
+        /// Mask amounts, e.g. for screenshots.
+        #[arg(long)]
+        hide: bool,
+    },
+
+    /// Link and manage accounts.
+    #[command(after_help = "\
+Wallets are linked by address (public, nothing to protect):
+  onra account add hl 0x...            Hyperliquid
+  onra account add sol <address>       Solana (Jupiter)
+
+Binance needs an API key. Create one with reading enabled and withdrawals
+disabled; Onra refuses keys that can withdraw. The secret is typed into a
+hidden prompt and kept in the system keychain:
+  onra account login bn")]
+    Account {
+        #[command(subcommand)]
+        action: AccountAction,
+    },
+
     /// Read and write configuration.
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountAction {
+    /// Show which accounts are linked.
+    List,
+    /// Link a wallet by address: `hl 0x...` or `sol <address>`.
+    Add { venue: String, address: String },
+    /// Link an exchange with an API key (prompted, never an argument).
+    Login { venue: String },
+    /// Unlink an account and delete its stored secret.
+    Remove { venue: String },
 }
 
 #[derive(Debug, Subcommand)]

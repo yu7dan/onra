@@ -1,4 +1,6 @@
 use onra_core::{Market, MarketKind, MarketQuery, Result, SearchHit, Ticker, VenueId};
+use std::collections::HashMap;
+
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -7,6 +9,12 @@ use crate::http::{decimal_f64, status_error, transport_error, unexpected};
 
 const VENUE: VenueId = VenueId::Jupiter;
 const API: &str = "https://lite-api.jup.ag";
+
+pub struct TokenMeta {
+    pub symbol: String,
+    pub verified: bool,
+    pub usd_price: Option<Decimal>,
+}
 
 pub struct Jupiter {
     http: Client,
@@ -79,6 +87,45 @@ impl Jupiter {
                 }
             })
             .collect())
+    }
+
+    /// Symbol, verification and price for many mints at once.
+    ///
+    /// Wallets full of airdropped spam need many batches and may hit the
+    /// rate limit; what was resolved before that is still returned.
+    pub async fn tokens(&self, mints: &[String]) -> Result<HashMap<String, TokenMeta>> {
+        let mut out = HashMap::new();
+        for chunk in mints.chunks(100) {
+            let batch = async {
+                let resp = self
+                    .http
+                    .get(format!("{API}/tokens/v2/search"))
+                    .query(&[("query", chunk.join(","))])
+                    .send()
+                    .await
+                    .map_err(|e| transport_error(VENUE, e))?;
+                if !resp.status().is_success() {
+                    return Err(status_error(VENUE, resp.status()));
+                }
+                resp.json::<Vec<Token>>().await.map_err(|e| transport_error(VENUE, e))
+            };
+            let tokens = match batch.await {
+                Ok(tokens) => tokens,
+                Err(e) if out.is_empty() => return Err(e),
+                Err(_) => break,
+            };
+            for t in tokens {
+                out.insert(
+                    t.id,
+                    TokenMeta {
+                        symbol: t.symbol.to_ascii_uppercase(),
+                        verified: t.is_verified,
+                        usd_price: t.usd_price.and_then(decimal_f64),
+                    },
+                );
+            }
+        }
+        Ok(out)
     }
 
     /// USD price for a mint.

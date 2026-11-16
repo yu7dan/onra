@@ -22,7 +22,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn new(data: Value, render: impl FnOnce(&Theme) -> Vec<String> + 'static) -> Self {
+    pub(crate) fn new(data: Value, render: impl FnOnce(&Theme) -> Vec<String> + 'static) -> Self {
         Self { data, render: Box::new(render) }
     }
 
@@ -47,6 +47,20 @@ pub async fn search(venues: &Venues, query: &str) -> Result<Outcome> {
     let results = crate::search::search(venues, query).await?;
     let data = serde_json::to_value(&results).expect("results serialize");
     Ok(Outcome::new(data, move |theme| crate::search::render(&results, theme)))
+}
+
+/// Balances, positions and/or orders across linked accounts.
+pub async fn portfolio(
+    venues: &Venues,
+    config: &Config,
+    parts: crate::account::Parts,
+    all: bool,
+    hide: bool,
+) -> Result<Outcome> {
+    let accounts = crate::account::load(config)?;
+    let p = crate::account::fetch(venues, &accounts, parts).await?;
+    let data = serde_json::to_value(&p).expect("portfolio serializes");
+    Ok(Outcome::new(data, move |theme| crate::account::render(&p, theme, all, hide)))
 }
 
 pub fn config(action: ConfigAction, config: &mut Config) -> Result<Outcome> {

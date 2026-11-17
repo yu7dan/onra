@@ -777,6 +777,7 @@ impl Shell {
                 | Command::Long(_)
                 | Command::Short(_)
                 | Command::Close(_)
+                | Command::Swap(_)
                 | Command::Exec { .. }
                 | Command::Approve { .. },
             ) => {

@@ -17,7 +17,7 @@ use onra_ui::text::{pad, width};
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::json;
 
-pub use types::{Amount, DEFAULT_SLIPPAGE_PCT, Execution, Plan, TradeRequest};
+pub use types::{Amount, DEFAULT_SLIPPAGE_PCT, Execution, Plan, SwapPlan, TradeRequest, units};
 
 use crate::cli::TradeArgs;
 use crate::commands::Outcome;
@@ -95,6 +95,7 @@ pub enum Kind {
     Long,
     Short,
     Close,
+    Swap,
 }
 
 pub async fn trade(kind: Kind, args: TradeArgs, theme: Option<Theme>) -> Result<Outcome> {
@@ -113,6 +114,7 @@ pub async fn trade(kind: Kind, args: TradeArgs, theme: Option<Theme>) -> Result<
         perp,
         leverage: args.lev,
         close: kind == Kind::Close,
+        swap_to: args.swap_to,
     };
     let initiator = initiator();
     unlocked().await?;
@@ -261,6 +263,54 @@ fn qty(v: Decimal) -> String {
     v.normalize().to_string()
 }
 
+/// The middle of a swap card: what goes in, what comes out at least, how.
+fn swap_lines(
+    body: &mut Vec<(String, String)>,
+    sw: &SwapPlan,
+    theme: &Theme,
+    label: &dyn Fn(&str) -> String,
+) {
+    let s = i18n::s();
+    let give = format!("{} {}", qty(units(sw.in_raw, sw.from.decimals)), sw.from.symbol);
+    let get = format!("{} {}", qty(units(sw.out_raw, sw.to.decimals)), sw.to.symbol);
+    body.push((
+        format!("  {give}  →  {get}"),
+        format!("  {}  {}  {}", theme.strong(&give), theme.faint("→"), theme.strong(&get)),
+    ));
+    body.push((String::new(), String::new()));
+    let row = |body: &mut Vec<(String, String)>, l: &str, text: String| {
+        body.push((format!("  {}{text}", label(l)), format!("  {}{text}", theme.dim(&label(l)))));
+    };
+    let min = fill(
+        s.min_out_line,
+        &[
+            ("min", &format!("{} {}", qty(units(sw.min_out_raw, sw.to.decimals)), sw.to.symbol)),
+            (
+                "slip",
+                &(Decimal::from(sw.slippage_bps) / Decimal::ONE_HUNDRED).normalize().to_string(),
+            ),
+        ],
+    );
+    row(body, s.lbl_min_out, min);
+    row(body, s.lbl_route, if sw.route.is_empty() { "—".into() } else { sw.route.join(" → ") });
+    row(body, s.lbl_impact, format!("{}%", sw.price_impact_pct.normalize()));
+    body.push((
+        format!("  {}✓ {}", label(s.lbl_simulated), s.sim_effects_ok),
+        format!(
+            "  {}{} {}",
+            theme.dim(&label(s.lbl_simulated)),
+            theme.brand("✓"),
+            s.sim_effects_ok
+        ),
+    ));
+    if !(sw.from.verified && sw.to.verified) {
+        body.push((
+            format!("  {}! {}", label(""), s.unverified_token),
+            format!("  {}{} {}", label(""), theme.warn("!"), theme.warn(s.unverified_token)),
+        ));
+    }
+}
+
 /// A rounded box around plan lines; `confirm` puts the key hints in the
 /// bottom border.
 pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
@@ -271,11 +321,17 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
         "SHORT" => s.card_short,
         "CLOSE" => s.card_close,
         "BUY" => s.card_buy,
+        "SWAP" => s.card_swap,
         _ => s.card_sell,
     };
     let net = if plan.testnet { format!(" · {}", s.testnet) } else { String::new() };
-    let right =
-        if plan.perp { format!("hyperliquid perp{net}") } else { format!("binance spot{net}") };
+    let right = if plan.swap.is_some() {
+        "jupiter · solana".to_string()
+    } else if plan.perp {
+        format!("hyperliquid perp{net}")
+    } else {
+        format!("binance spot{net}")
+    };
     // Stablecoin amounts to the cent, rounded against the trader: a buy
     // spends at most this, a sell receives at least this.
     let cost = (plan.qty * plan.price).round_dp_with_strategy(
@@ -286,75 +342,84 @@ pub fn card(plan: &Plan, theme: &Theme, confirm: bool) -> Vec<String> {
     let mut body: Vec<(String, String)> = Vec::new();
     let line = |plain: String, styled: String| (plain, styled);
     body.push(line(String::new(), String::new()));
-    let headline_plain = format!("{} {}", qty(plan.qty), plan.base);
-    // Perps don't spend their notional, only margin: say what the size is worth.
-    let bound = if plan.perp {
-        fill(s.notional_about, &[("amount", &format!("${}", onra_ui::format::price(cost, 2)))])
-    } else {
-        fill(
-            if buy { s.for_at_most } else { s.for_at_least },
-            &[("amount", &format!("{} {}", onra_ui::format::price(cost, 2), plan.quote))],
-        )
-    };
-    body.push(line(
-        format!("  {headline_plain}   {bound}"),
-        format!("  {}   {}", theme.strong(&headline_plain), theme.dim(&bound)),
-    ));
-    body.push(line(String::new(), String::new()));
-
     let label = |t: &str| pad(t, 11);
-    let price_text = match plan.slippage_pct {
-        Some(slip) => {
-            let best = fill(
-                if buy { s.best_ask } else { s.best_bid },
-                &[("p", &money(plan.reference_price)), ("slip", &slip.normalize().to_string())],
+    if let Some(sw) = &plan.swap {
+        swap_lines(&mut body, sw, theme, &label);
+    } else {
+        let headline_plain = format!("{} {}", qty(plan.qty), plan.base);
+        // Perps don't spend their notional, only margin: say what the size is worth.
+        let bound = if plan.perp {
+            fill(s.notional_about, &[("amount", &format!("${}", onra_ui::format::price(cost, 2)))])
+        } else {
+            fill(
+                if buy { s.for_at_most } else { s.for_at_least },
+                &[("amount", &format!("{} {}", onra_ui::format::price(cost, 2), plan.quote))],
+            )
+        };
+        body.push(line(
+            format!("  {headline_plain}   {bound}"),
+            format!("  {}   {}", theme.strong(&headline_plain), theme.dim(&bound)),
+        ));
+        body.push(line(String::new(), String::new()));
+
+        let price_text = match plan.slippage_pct {
+            Some(slip) => {
+                let best = fill(
+                    if buy { s.best_ask } else { s.best_bid },
+                    &[("p", &money(plan.reference_price)), ("slip", &slip.normalize().to_string())],
+                );
+                format!("{} {}  ·  {best}", if buy { "≤" } else { "≥" }, money(plan.price))
+            }
+            None => money(plan.price),
+        };
+        body.push(line(
+            format!("  {}{price_text}", label(s.lbl_price)),
+            format!("  {}{price_text}", theme.dim(&label(s.lbl_price))),
+        ));
+        let order = if plan.time_in_force == "gtc" { s.order_gtc } else { s.order_ioc };
+        body.push(line(
+            format!("  {}{order}", label(s.lbl_order)),
+            format!("  {}{order}", theme.dim(&label(s.lbl_order))),
+        ));
+        if let Some(lev) = plan.leverage {
+            let margin = onra_ui::format::price(plan.qty * plan.price / lev, 2);
+            let text = fill(
+                s.leverage_line,
+                &[("lev", &lev.normalize().to_string()), ("margin", &format!("${margin}"))],
             );
-            format!("{} {}  ·  {best}", if buy { "≤" } else { "≥" }, money(plan.price))
+            body.push(line(
+                format!("  {}{text}", label(s.lbl_leverage)),
+                format!("  {}{text}", theme.dim(&label(s.lbl_leverage))),
+            ));
         }
-        None => money(plan.price),
-    };
-    body.push(line(
-        format!("  {}{price_text}", label(s.lbl_price)),
-        format!("  {}{price_text}", theme.dim(&label(s.lbl_price))),
-    ));
-    let order = if plan.time_in_force == "gtc" { s.order_gtc } else { s.order_ioc };
-    body.push(line(
-        format!("  {}{order}", label(s.lbl_order)),
-        format!("  {}{order}", theme.dim(&label(s.lbl_order))),
-    ));
-    if let Some(lev) = plan.leverage {
-        let margin = onra_ui::format::price(plan.qty * plan.price / lev, 2);
-        let text = fill(
-            s.leverage_line,
-            &[("lev", &lev.normalize().to_string()), ("margin", &format!("${margin}"))],
-        );
-        body.push(line(
-            format!("  {}{text}", label(s.lbl_leverage)),
-            format!("  {}{text}", theme.dim(&label(s.lbl_leverage))),
-        ));
-    }
-    if plan.reduce_only {
-        body.push(line(
-            format!("  {}{}", label(""), s.reduce_only_line),
-            format!("  {}{}", label(""), theme.faint(s.reduce_only_line)),
-        ));
-    }
-    if !plan.simulated && plan.perp {
-        body.push(line(
-            format!("  {}✓ {}", label(s.lbl_checked), s.checked_hl),
-            format!("  {}{} {}", theme.dim(&label(s.lbl_checked)), theme.brand("✓"), s.checked_hl),
-        ));
-    }
-    if plan.simulated {
-        body.push(line(
-            format!("  {}✓ {}", label(s.lbl_simulated), s.simulated_ok),
-            format!(
-                "  {}{} {}",
-                theme.dim(&label(s.lbl_simulated)),
-                theme.brand("✓"),
-                s.simulated_ok
-            ),
-        ));
+        if plan.reduce_only {
+            body.push(line(
+                format!("  {}{}", label(""), s.reduce_only_line),
+                format!("  {}{}", label(""), theme.faint(s.reduce_only_line)),
+            ));
+        }
+        if !plan.simulated && plan.perp {
+            body.push(line(
+                format!("  {}✓ {}", label(s.lbl_checked), s.checked_hl),
+                format!(
+                    "  {}{} {}",
+                    theme.dim(&label(s.lbl_checked)),
+                    theme.brand("✓"),
+                    s.checked_hl
+                ),
+            ));
+        }
+        if plan.simulated {
+            body.push(line(
+                format!("  {}✓ {}", label(s.lbl_simulated), s.simulated_ok),
+                format!(
+                    "  {}{} {}",
+                    theme.dim(&label(s.lbl_simulated)),
+                    theme.brand("✓"),
+                    s.simulated_ok
+                ),
+            ));
+        }
     }
     body.push(line(String::new(), String::new()));
     // Conditions that pass (venue allowed, asset verified, not halted) are
@@ -423,6 +488,12 @@ fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {
     let net = if exec.testnet { format!(" · {}", s.testnet) } else { String::new() };
     let id = format!("{}{net}", fill(s.order_id, &[("id", &exec.order_id)]));
     let mut lines = Vec::new();
+    if exec.status == "sent" {
+        lines.push(format!("  {} {}", theme.warn("!"), s.swap_sent));
+        lines.push(format!("    {}", theme.faint(&format!("solscan.io/tx/{}", exec.order_id))));
+        lines.push(String::new());
+        return lines;
+    }
     if exec.executed_qty.is_zero() {
         let text = if exec.status == "new" { s.order_resting } else { s.nothing_filled };
         lines.push(format!("  {} {text}", theme.warn("!")));
@@ -434,6 +505,19 @@ fn result_lines(exec: &Execution, theme: &Theme) -> Vec<String> {
             .map(|(a, asset)| format!("{} {asset}", a.normalize()))
             .collect::<Vec<_>>()
             .join(" + ");
+        if exec.action == "SWAP" {
+            let text = fill(
+                s.swapped_ok,
+                &[
+                    ("give", &format!("{} {}", qty(exec.quote_qty), exec.quote)),
+                    ("get", &format!("{} {}", qty(exec.executed_qty), exec.base)),
+                ],
+            );
+            lines.push(format!("  {} {text}", theme.brand("✓")));
+            lines.push(format!("    {}", theme.faint(&format!("solscan.io/tx/{}", exec.order_id))));
+            lines.push(String::new());
+            return lines;
+        }
         let side = match exec.action.as_str() {
             "LONG" => s.opened_long,
             "SHORT" => s.opened_short,
@@ -507,7 +591,31 @@ mod tests {
             leverage: None,
             reduce_only: false,
             asset_index: None,
+            swap: None,
         }
+    }
+
+    fn swap_plan() -> Plan {
+        let tok = |mint: &str, symbol: &str, decimals| onra_venues::SwapToken {
+            mint: mint.into(),
+            symbol: symbol.into(),
+            decimals,
+            verified: true,
+            usd_price: None,
+        };
+        let mut p = sample(Decision::Allow);
+        p.venue = VenueId::Jupiter;
+        p.swap = Some(SwapPlan {
+            from: tok("u", "USDC", 6),
+            to: tok("s", "SOL", 9),
+            in_raw: 20_000_000,
+            out_raw: 276_619_520,
+            min_out_raw: 275_236_422,
+            slippage_bps: 50,
+            price_impact_pct: Decimal::new(12, 4),
+            route: vec!["Raydium CLMM".into(), "Orca".into()],
+        });
+        p
     }
 
     fn perp(close: bool) -> Plan {
@@ -536,6 +644,7 @@ mod tests {
                 sample(Decision::NeedsApproval),
                 perp(false),
                 perp(true),
+                swap_plan(),
             ];
             for plan in plans {
                 let decision = plan.verdict.decision;

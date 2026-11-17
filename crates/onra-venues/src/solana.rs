@@ -36,7 +36,30 @@ struct WithValue<T> {
 
 #[derive(Deserialize)]
 struct TokenAccount {
+    #[serde(default)]
+    pubkey: String,
     account: AccountData,
+}
+
+/// One account of a wallet with its raw balance: the wallet itself (SOL, in
+/// lamports, under [`SOL_MINT`]) or one of its token accounts.
+#[derive(Debug, Clone)]
+pub struct WalletAccount {
+    pub address: String,
+    pub mint: String,
+    pub raw: u64,
+    /// The wallet's own SOL, as opposed to a token account.
+    pub native: bool,
+}
+
+/// What a transaction would do, according to the cluster.
+#[derive(Debug, Clone)]
+pub struct Simulation {
+    /// `None` when it would succeed.
+    pub err: Option<Value>,
+    pub logs: Vec<String>,
+    /// Raw balance of each requested account afterwards (`None`: closed).
+    pub after: Vec<Option<u64>>,
 }
 
 #[derive(Deserialize)]
@@ -120,5 +143,122 @@ impl Solana {
             }
         }
         Ok(out.into_iter().map(|(m, a)| (m, a.normalize())).collect())
+    }
+}
+
+impl Solana {
+    /// Every account of the wallet that holds value, with exact raw amounts.
+    pub async fn accounts(&self, owner: &str) -> Result<Vec<WalletAccount>> {
+        let lamports = self.call::<WithValue<u64>>("getBalance", json!([owner]));
+        let accounts = join_all(TOKEN_PROGRAMS.map(|program| {
+            self.call::<WithValue<Vec<TokenAccount>>>(
+                "getTokenAccountsByOwner",
+                json!([owner, { "programId": program }, { "encoding": "jsonParsed" }]),
+            )
+        }));
+        let (lamports, accounts) = tokio::join!(lamports, accounts);
+        let mut out = vec![WalletAccount {
+            address: owner.to_string(),
+            mint: SOL_MINT.to_string(),
+            raw: lamports?.value,
+            native: true,
+        }];
+        for program in accounts {
+            for acc in program?.value {
+                let info = acc.account.data.parsed.info;
+                let raw = info.token_amount.amount.parse().unwrap_or(0);
+                out.push(WalletAccount {
+                    address: acc.pubkey,
+                    mint: info.mint,
+                    raw,
+                    native: false,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Runs a transaction against the current state without sending it, and
+    /// reads back `watch` afterwards. No signature needed.
+    pub async fn simulate(&self, tx: &[u8], watch: &[WalletAccount]) -> Result<Simulation> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        #[derive(Deserialize)]
+        struct Sim {
+            err: Option<Value>,
+            logs: Option<Vec<String>>,
+            accounts: Option<Vec<Option<Acc>>>,
+        }
+        #[derive(Deserialize)]
+        struct Acc {
+            lamports: u64,
+            data: (String, String),
+        }
+        let addresses: Vec<&str> = watch.iter().map(|a| a.address.as_str()).collect();
+        let sim: WithValue<Sim> = self
+            .call(
+                "simulateTransaction",
+                json!([b64.encode(tx), {
+                    "encoding": "base64",
+                    "sigVerify": false,
+                    "replaceRecentBlockhash": true,
+                    "commitment": "confirmed",
+                    "accounts": { "encoding": "base64", "addresses": addresses },
+                }]),
+            )
+            .await?;
+        let accounts = sim.value.accounts.unwrap_or_default();
+        let after = watch
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let acc = accounts.get(i)?.as_ref()?;
+                if w.native {
+                    return Some(acc.lamports);
+                }
+                // An SPL token account keeps its amount at bytes 64..72.
+                let data = b64.decode(&acc.data.0).ok()?;
+                Some(u64::from_le_bytes(data.get(64..72)?.try_into().ok()?))
+            })
+            .collect();
+        Ok(Simulation { err: sim.value.err, logs: sim.value.logs.unwrap_or_default(), after })
+    }
+
+    /// Sends a signed transaction; returns its signature.
+    pub async fn send(&self, tx: &[u8]) -> Result<String> {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(tx);
+        self.call(
+            "sendTransaction",
+            json!([encoded, { "encoding": "base64", "preflightCommitment": "confirmed", "maxRetries": 3 }]),
+        )
+        .await
+    }
+
+    /// Waits until the transaction is confirmed. `Ok(false)` if it is still
+    /// unknown when `patience` runs out (it may yet land).
+    pub async fn confirm(&self, signature: &str, patience: std::time::Duration) -> Result<bool> {
+        let started = std::time::Instant::now();
+        loop {
+            let st: WithValue<Vec<Option<Value>>> =
+                self.call("getSignatureStatuses", json!([[signature]])).await?;
+            if let Some(Some(status)) = st.value.first() {
+                if !status["err"].is_null() {
+                    return Err(onra_core::Error::new(
+                        onra_core::ErrorCode::Venue,
+                        format!("the swap failed on chain: {}", status["err"]),
+                    )
+                    .with_hint(json!({ "venue": "jupiter", "cause": "failed_on_chain", "signature": signature })));
+                }
+                if matches!(status["confirmationStatus"].as_str(), Some("confirmed" | "finalized"))
+                {
+                    return Ok(true);
+                }
+            }
+            if started.elapsed() >= patience {
+                return Ok(false);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        }
     }
 }

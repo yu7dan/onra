@@ -91,6 +91,9 @@ pub struct TradeRequest {
     /// Close (part of) the position: the side follows the position.
     #[serde(default)]
     pub close: bool,
+    /// A Jupiter swap from `market` into this token (symbol or mint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swap_to: Option<String>,
 }
 
 pub const DEFAULT_SLIPPAGE_PCT: Decimal = Decimal::from_parts(5, 0, 0, false, 1);
@@ -134,11 +137,36 @@ pub struct Plan {
     /// The venue's index for the asset (Hyperliquid names assets by index).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset_index: Option<u32>,
+    /// The route of a Jupiter swap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swap: Option<SwapPlan>,
+}
+
+/// A swap as planned: amounts in the tokens' smallest units.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapPlan {
+    pub from: onra_venues::SwapToken,
+    pub to: onra_venues::SwapToken,
+    pub in_raw: u64,
+    pub out_raw: u64,
+    /// The least this swap may deliver; the signer will not sign for less.
+    pub min_out_raw: u64,
+    pub slippage_bps: u32,
+    pub price_impact_pct: Decimal,
+    pub route: Vec<String>,
+}
+
+/// Raw units to a decimal amount.
+pub fn units(raw: u64, decimals: u32) -> Decimal {
+    Decimal::from_i128_with_scale(i128::from(raw), decimals).normalize()
 }
 
 impl Plan {
     /// LONG, SHORT, CLOSE for perps; BUY, SELL for spot.
     pub fn action(&self) -> &'static str {
+        if self.swap.is_some() {
+            return "SWAP";
+        }
         match (self.perp, self.reduce_only, self.side) {
             (true, true, _) => "CLOSE",
             (true, false, OrderSide::Buy) => "LONG",
@@ -150,6 +178,15 @@ impl Plan {
 
     /// One line for logs and lists: `BUY 0.00154 BTC @ ≤65,100 · BTCUSDT@bn`.
     pub fn summary(&self) -> String {
+        if let Some(sw) = &self.swap {
+            return format!(
+                "SWAP {} {} -> ≥{} {} · jup",
+                units(sw.in_raw, sw.from.decimals),
+                sw.from.symbol,
+                units(sw.min_out_raw, sw.to.decimals),
+                sw.to.symbol
+            );
+        }
         let side = self.action();
         let bound = if self.time_in_force == "gtc" {
             ""

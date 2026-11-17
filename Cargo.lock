@@ -1735,9 +1735,11 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "onra-cli"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "clap",
  "crossterm",
  "dirs",
+ "ed25519-dalek",
  "futures",
  "hex",
  "humantime",
@@ -1839,6 +1841,7 @@ dependencies = [
 name = "onra-venues"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "futures",
  "hex",
  "hmac 0.12.1",

@@ -8,6 +8,7 @@ mod http;
 mod hyperliquid;
 mod hyperliquid_trade;
 mod jupiter;
+mod jupiter_swap;
 mod solana;
 
 use onra_core::{
@@ -22,6 +23,8 @@ pub use http::{DEFAULT_SOLANA_RPC, NetConfig};
 pub use hyperliquid_trade::{
     HyperliquidTrade, PerpAccount, PerpFill, PerpRules, Top as PerpTop, parse_order_status,
 };
+pub use jupiter_swap::{JupiterSwap, SwapQuote, SwapToken};
+pub use solana::{SOL_MINT, Simulation, WalletAccount};
 
 pub struct Venues {
     http: reqwest::Client,
@@ -55,6 +58,16 @@ impl Venues {
     /// Spot trading on Binance, or its test network.
     pub fn binance_spot(&self, testnet: bool) -> BinanceSpot {
         BinanceSpot::new(self.http.clone(), testnet)
+    }
+
+    /// Jupiter swaps.
+    pub fn jupiter_swap(&self) -> JupiterSwap {
+        JupiterSwap::new(self.http.clone())
+    }
+
+    /// The Solana cluster, for simulating and sending transactions.
+    pub fn solana(&self) -> &solana::Solana {
+        &self.solana
     }
 
     /// Perps trading on Hyperliquid, or its test network.

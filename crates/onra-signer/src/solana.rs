@@ -6,6 +6,7 @@ use zeroize::Zeroizing;
 
 use crate::invalid;
 
+#[derive(Clone)]
 pub struct SolanaKey {
     key: SigningKey,
 }
@@ -39,6 +40,44 @@ impl SolanaKey {
     pub fn sign(&self, message: &[u8]) -> [u8; 64] {
         self.key.sign(message).to_bytes()
     }
+
+    /// Signs a serialized transaction (legacy or versioned) in place of its
+    /// empty signature slot. Refuses one that doesn't ask this wallet to sign.
+    pub fn sign_transaction(&self, tx: &[u8]) -> Result<Vec<u8>> {
+        let bad = || invalid("not a Solana transaction");
+        let (sigs, sig_len) = compact_u16(tx, 0).ok_or_else(bad)?;
+        let msg_start = sig_len + 64 * sigs;
+        let msg = tx.get(msg_start..).filter(|m| !m.is_empty()).ok_or_else(bad)?;
+        // Versioned messages start with 0x80 | version; legacy ones with the header.
+        let h = usize::from(msg[0] & 0x80 != 0);
+        let required = usize::from(*msg.get(h).ok_or_else(bad)?);
+        let (keys, keys_len) = compact_u16(msg, h + 3).ok_or_else(bad)?;
+        let first = h + 3 + keys_len;
+        let me = self.public_bytes();
+        let index = (0..required.min(keys))
+            .find(|i| msg.get(first + 32 * i..first + 32 * (i + 1)) == Some(&me[..]))
+            .ok_or_else(|| invalid("this transaction does not ask this wallet to sign"))?;
+        if index >= sigs {
+            return Err(bad());
+        }
+        let mut out = tx.to_vec();
+        let at = sig_len + 64 * index;
+        out[at..at + 64].copy_from_slice(&self.sign(msg));
+        Ok(out)
+    }
+}
+
+/// Solana's compact-u16: 7 bits per byte, high bit set while more follow.
+fn compact_u16(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
+    let mut value = 0usize;
+    for i in 0..3 {
+        let b = *bytes.get(at + i)?;
+        value |= usize::from(b & 0x7f) << (7 * i);
+        if b & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -63,6 +102,41 @@ mod tests {
             assert_eq!(hex::encode(key.public_bytes()), PUBLIC);
             assert_eq!(hex::encode(key.sign(b"")), SIGNATURE);
         }
+    }
+
+    #[test]
+    fn signs_versioned_transactions() {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let key = SolanaKey::parse(&bs58::encode(pair()).into_string()).unwrap();
+        // v0 message: prefix, header (1 signer), 2 keys, blockhash, no instructions.
+        let mut msg = vec![0x80, 1, 0, 1, 2];
+        msg.extend_from_slice(&key.public_bytes());
+        msg.extend_from_slice(&[7u8; 32]);
+        msg.extend_from_slice(&[9u8; 32]);
+        msg.extend_from_slice(&[0, 0]);
+        let mut tx = vec![1];
+        tx.extend_from_slice(&[0u8; 64]);
+        tx.extend_from_slice(&msg);
+
+        let signed = key.sign_transaction(&tx).unwrap();
+        let sig = Signature::from_slice(&signed[1..65]).unwrap();
+        let vk = VerifyingKey::from_bytes(&key.public_bytes()).unwrap();
+        assert!(vk.verify(&msg, &sig).is_ok());
+        assert_eq!(&signed[65..], &msg[..], "the message is untouched");
+
+        // A transaction for someone else is refused.
+        let mut other = tx.clone();
+        other[1 + 64 + 5] ^= 1;
+        assert!(key.sign_transaction(&other).is_err());
+        assert!(key.sign_transaction(&[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn reads_compact_u16() {
+        assert_eq!(compact_u16(&[0x05], 0), Some((5, 1)));
+        assert_eq!(compact_u16(&[0x80, 0x01], 0), Some((128, 2)));
+        assert_eq!(compact_u16(&[0xff, 0xff, 0x03], 0), Some((65535, 3)));
+        assert_eq!(compact_u16(&[0x80], 0), None);
     }
 
     #[test]

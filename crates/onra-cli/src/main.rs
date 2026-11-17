@@ -131,6 +131,7 @@ fn run(cli: Cli, mut config: config::Config, out: &Output) -> Result<ExitCode> {
         Command::Long(args) => trade_command(trade::Kind::Long, args, out),
         Command::Short(args) => trade_command(trade::Kind::Short, args, out),
         Command::Close(args) => trade_command(trade::Kind::Close, args.into(), out),
+        Command::Swap(args) => trade_command(trade::Kind::Swap, args.into(), out),
         Command::Exec { plan_id } => Ok(out.emit(block_on(trade::exec(&plan_id))??)),
         Command::Approve { plan_id } => {
             Ok(out.emit(block_on(trade::approve(&plan_id, out.theme().copied()))??))

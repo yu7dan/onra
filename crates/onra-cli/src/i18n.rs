@@ -111,7 +111,23 @@ pub fn error_text(error: &Error) -> String {
         ErrorCode::ApprovalRequired => {
             hint("plan_id").map(|id| fill(s.err_approval, &[("id", &id)]))
         }
+        ErrorCode::PlanExpired if hint("cause").as_deref() == Some("price_moved") => {
+            Some(s.err_price_moved.to_string())
+        }
         ErrorCode::PlanExpired => Some(s.err_plan_expired.to_string()),
+        ErrorCode::Policy if hint("cause").as_deref() == Some("unexpected_effects") => {
+            Some(s.err_unexpected_effects.to_string())
+        }
+        ErrorCode::Usage if hint("cause").as_deref() == Some("same_token") => {
+            Some(s.err_same_token.to_string())
+        }
+        ErrorCode::Usage if hint("cause").as_deref() == Some("unverified") => {
+            hint("query").map(|q| fill(s.err_unverified, &[("query", &q)]))
+        }
+        ErrorCode::Venue if hint("cause").as_deref() == Some("simulation_failed") => {
+            let why = error.message.trim_start_matches("the swap would fail: ").to_string();
+            Some(fill(s.err_simulation_failed, &[("why", &why)]))
+        }
         ErrorCode::Policy if hint("cause").as_deref() == Some("denied") => {
             // Name the limits the way the plan card does.
             let checks =
@@ -365,6 +381,20 @@ pub struct Strings {
     pub err_amount_unit: &'static str,
     pub err_no_trading_key: &'static str,
     pub card_long: &'static str,
+    pub card_swap: &'static str,
+    pub err_same_token: &'static str,
+    pub lbl_min_out: &'static str,
+    pub min_out_line: &'static str,
+    pub lbl_route: &'static str,
+    pub lbl_impact: &'static str,
+    pub sim_effects_ok: &'static str,
+    pub unverified_token: &'static str,
+    pub swapped_ok: &'static str,
+    pub swap_sent: &'static str,
+    pub err_price_moved: &'static str,
+    pub err_unexpected_effects: &'static str,
+    pub err_unverified: &'static str,
+    pub err_simulation_failed: &'static str,
     pub notional_about: &'static str,
     pub card_short: &'static str,
     pub card_close: &'static str,
@@ -591,6 +621,20 @@ pub const EN: Strings = Strings {
     err_amount_unit: "say what the amount is in, e.g. `$100` or `100 USDT`",
     err_no_trading_key: "no Binance trading key for this network; add one with `{cmd}`",
     card_long: "LONG",
+    card_swap: "SWAP",
+    err_same_token: "swapping a token for itself does nothing",
+    lbl_min_out: "At least",
+    min_out_line: "{min} · {slip}% slippage bound",
+    lbl_route: "Route",
+    lbl_impact: "Impact",
+    sim_effects_ok: "only the planned amount leaves the wallet",
+    unverified_token: "includes an unverified token",
+    swapped_ok: "swapped {give} → {get}",
+    swap_sent: "sent, not confirmed yet; check the transaction before trying again",
+    err_price_moved: "the price moved past the plan's minimum; make a new plan",
+    err_unexpected_effects: "the transaction would move more than the plan says, so it was not signed",
+    err_unverified: "every token called {query} is unverified; name it by mint address if you are sure",
+    err_simulation_failed: "the swap would fail on chain: {why}",
     notional_about: "worth about {amount}",
     card_short: "SHORT",
     card_close: "CLOSE",
@@ -816,6 +860,20 @@ pub const ZH: Strings = Strings {
     err_amount_unit: "请写明数量单位，例如 `$100` 或 `100 USDT`",
     err_no_trading_key: "这个网络还没有币安交易密钥，请用 `{cmd}` 添加",
     card_long: "做多",
+    card_swap: "兑换",
+    err_same_token: "同一种代币不能兑换给自己",
+    lbl_min_out: "至少收到",
+    min_out_line: "{min} · 滑点上限 {slip}%",
+    lbl_route: "路线",
+    lbl_impact: "价格影响",
+    sim_effects_ok: "只有方案里的金额会离开钱包",
+    unverified_token: "包含未验证的代币",
+    swapped_ok: "已兑换 {give} → {get}",
+    swap_sent: "已发送，但还没确认；重试前请先查看这笔交易",
+    err_price_moved: "价格已越过方案的最少收到，请重新生成方案",
+    err_unexpected_effects: "这笔交易会转走超出方案的资产，已拒绝签名",
+    err_unverified: "名为 {query} 的代币都没有验证；如果确定，请用 mint 地址指定",
+    err_simulation_failed: "这笔兑换在链上会失败：{why}",
     notional_about: "名义价值约 {amount}",
     card_short: "做空",
     card_close: "平仓",

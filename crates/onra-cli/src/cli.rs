@@ -233,6 +233,21 @@ Examples:
   onra close BTC 50% --testnet")]
     Close(CloseArgs),
 
+    /// Swap tokens on Solana through Jupiter.
+    #[command(after_help = "\
+The amount is in the token you give: 100 USDC SOL swaps 100 USDC for SOL.
+Also $50 (dollars of it), 50% or max. Symbols resolve to verified tokens
+only; anything else must be named by mint address.
+
+Before signing, the signer simulates the transaction Jupiter built and
+checks the wallet afterwards: only the planned amount may leave it.
+
+Examples:
+  onra swap 100 USDC SOL
+  onra swap $20 SOL USDC
+  onra swap 50% JUP USDC --slippage 1%")]
+    Swap(SwapArgs),
+
     /// Carry out a plan made with --plan.
     Exec {
         #[arg(value_name = "PLAN_ID")]
@@ -361,6 +376,54 @@ pub struct TradeArgs {
     /// Perp leverage (long, short), e.g. 3. Cross margin; 1x by default.
     #[arg(long, value_name = "N")]
     pub lev: Option<Decimal>,
+    /// Set by `onra swap`.
+    #[arg(skip)]
+    pub swap_to: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SwapArgs {
+    /// How much to give: `100`, `$50`, `50%` or `max`.
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    /// The token you give: a symbol (verified tokens only) or a mint.
+    #[arg(value_name = "FROM")]
+    pub from: String,
+    /// The token you get.
+    #[arg(value_name = "TO")]
+    pub to: String,
+    /// How much less than quoted the swap may deliver, e.g. 0.3%.
+    #[arg(long, value_name = "PCT")]
+    pub slippage: Option<String>,
+    #[arg(long)]
+    pub plan: bool,
+    #[arg(short, long)]
+    pub yes: bool,
+    #[arg(long, value_name = "ID")]
+    pub client_id: Option<String>,
+}
+
+impl From<SwapArgs> for TradeArgs {
+    fn from(s: SwapArgs) -> Self {
+        // A bare number is in the token given; $, % and max speak for themselves.
+        let amount = if s.amount.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+            vec![s.amount, s.from.clone()]
+        } else {
+            vec![s.amount]
+        };
+        TradeArgs {
+            market: s.from,
+            amount,
+            limit: None,
+            slippage: s.slippage,
+            testnet: false,
+            plan: s.plan,
+            yes: s.yes,
+            client_id: s.client_id,
+            lev: None,
+            swap_to: Some(s.to),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -400,6 +463,7 @@ impl From<CloseArgs> for TradeArgs {
             yes: c.yes,
             client_id: c.client_id,
             lev: None,
+            swap_to: None,
         }
     }
 }

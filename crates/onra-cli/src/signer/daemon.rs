@@ -174,7 +174,11 @@ fn credentials(
 ) -> Result<(exec::Signer, Zeroizing<Vec<u8>>)> {
     let s = state.lock().expect("state lock");
     let u = s.unlocked.as_ref().ok_or_else(locked)?;
-    let base = if venue == VenueId::Hyperliquid { "hl" } else { "bn" };
+    let base = match venue {
+        VenueId::Hyperliquid => "hl",
+        VenueId::Jupiter => "sol",
+        VenueId::Binance => "bn",
+    };
     let name = if testnet { format!("{base}.testnet") } else { base.to_string() };
     let missing = || {
         let flag = if testnet { " --testnet" } else { "" };
@@ -195,6 +199,7 @@ fn credentials(
             })?;
             exec::Signer::Hyperliquid { key: k.clone(), user }
         }
+        (VenueId::Jupiter, Some(TradingKey::Solana(k))) => exec::Signer::Solana(k.clone()),
         _ => return Err(missing()),
     };
     Ok((signer, u.seal.clone()))
